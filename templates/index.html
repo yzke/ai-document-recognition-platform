@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI文档识别平台</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header>
+    <h1>AI文档识别平台</h1>
+    <div class="header-actions">
+      <button id="openSettings" class="ghost" type="button">高级设置</button>
+      <button id="openHistory" class="ghost" type="button">历史文件</button>
+    </div>
+  </header>
+
+  <aside id="settingsDrawer" class="settings drawer-closed">
+    <form id="form">
+      <div class="panel-head">
+        <div class="title">高级设置</div>
+        <button id="closeSettings" class="ghost" type="button">关闭</button>
+      </div>
+      <div class="row">
+        <div><label>DPI</label><input name="dpi" type="number" value="180" min="120" max="260"></div>
+        <div><label>OCR 并发</label><input name="workers" type="number" value="6" min="1" max="12"></div>
+      </div>
+      <label>AI 并发</label>
+      <input name="vlm_workers" type="number" value="2" min="1" max="12">
+      <label>VLM 模型</label>
+      <select name="vlm_model">
+        {% for model in models %}<option>{{ model }}</option>{% endfor %}
+      </select>
+      <label>SiliconFlow API Key</label>
+      <input name="api_key" type="password" placeholder="配置后启用 AI 提取">
+    </form>
+  </aside>
+
+  <aside id="historyDrawer" class="settings history-drawer drawer-closed">
+    <div class="panel-head">
+      <div class="history-head"><div class="title">历史文件</div><button id="refreshHistory" class="ghost" type="button">刷新</button></div>
+      <button id="closeHistory" class="ghost" type="button">关闭</button>
+    </div>
+    <div id="historyList" class="history-list"></div>
+  </aside>
+  <div id="drawerMask" class="drawer-mask"></div>
+
+  <main>
+    <section class="taskbar">
+      <div class="title">文件与筛选</div>
+      <div class="filegrid">
+        <div class="file-field"><label>PDF 文件</label><input id="pdf" form="form" name="pdf" type="file" accept="application/pdf" required></div>
+        <div class="keyword-field"><label>本文件筛选关键词</label><input id="keywords" class="keywordbox" form="form" name="keywords" list="keywordHistory" value="{{ default_keywords }}"><datalist id="keywordHistory"></datalist></div>
+        <div class="range-field"><label>页码范围</label><input form="form" name="page_range" placeholder="例如 1,2-3,5-15"></div>
+        <div class="auto-field"><label>AI 提取</label><label class="check inline-check"><input form="form" name="auto_vlm_candidates" type="checkbox">命中页自动 AI 识别</label></div>
+        <div class="actions file-actions"><button id="submit" form="form">上传并识别</button><button id="stop" class="danger" type="button" disabled>停止任务</button><a id="download" style="display:none" href="#">下载全文 OCR</a></div>
+      </div>
+      <div class="meta">
+        <div class="metric"><span class="muted small">文件</span><b id="fileName">未上传</b></div>
+        <div class="metric"><span class="muted small">状态</span><b id="jobStatus">等待</b></div>
+        <div class="metric"><span class="muted small">进度</span><b id="jobProgress">0 / 0</b></div>
+        <div class="metric"><span class="muted small">命中页</span><b id="candidateCount">0</b></div>
+        <div class="metric"><span class="muted small">耗时</span><b id="runtimeInfo">00:00</b></div>
+      </div>
+      <div class="bar"><div id="progress"></div></div>
+      <div id="jobline" class="muted small">等待上传</div>
+    </section>
+
+    <section>
+      <div class="workspace">
+        <div class="pagepanel">
+          <div class="title">页面筛选</div>
+          <div class="filters">
+            <div class="seg">
+              <button id="filterAll" class="active" type="button">全部</button><button id="filterCand" type="button">命中</button>
+              <button id="filterVlm" type="button">已提取</button><button id="filterNoVlm" type="button">未提取</button>
+            </div>
+            <div class="filterrow"><input id="pageSearch" type="search" placeholder="页码 / 关键词"><button id="clearFilter" class="ghost" type="button">清空</button></div>
+            <div class="selectrow"><button id="selectVisible" class="ghost" type="button">选当前</button><button id="selectCandidates" class="ghost" type="button">选命中</button><button id="clearSelected" class="ghost" type="button">清选择</button></div>
+            <div id="filterSummary" class="muted small">0 页</div>
+          </div>
+          <div id="pages" class="pages"></div>
+        </div>
+        <div class="viewer">
+          <div class="tabs">
+            <div class="tabgroup"><button id="runVlm" class="secondary" type="button" disabled>AI 提取选中页</button><button id="ocrTab" class="active" type="button">文本识别结果</button><button id="vlmTab" type="button">AI 提取结果</button></div>
+            <span id="vlmStatus" class="muted small">大模型未配置，仅支持文本识别</span>
+          </div>
+          <div class="split">
+            <div class="preview">
+              <div class="previewbar">
+                <div class="tabgroup"><button id="zoomOut" class="ghost" type="button">-</button><span id="zoomLabel" class="zoomlabel">适页</span><button id="zoomIn" class="ghost" type="button">+</button></div>
+                <div class="tabgroup"><button id="rotateLeft" class="ghost" type="button">左转</button><button id="rotateRight" class="ghost" type="button">右转</button><button id="resetView" class="ghost" type="button">适页</button></div>
+              </div>
+              <div id="imageBox" class="imagebox"><img id="pageImage" draggable="false" alt=""></div>
+            </div>
+            <div id="textBox" class="textbox"><pre>选择页面查看结果</pre></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
