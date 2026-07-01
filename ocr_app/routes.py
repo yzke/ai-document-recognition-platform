@@ -68,8 +68,9 @@ def create_app():
             workers = max(1, min(MAX_WORKERS, int(request.form.get("workers", "6") or 6)))
             vlm_workers = max(1, min(MAX_WORKERS, int(request.form.get("vlm_workers", "2") or 2)))
             max_pages = max(0, int(request.form.get("max_pages", "0") or 0))
+            low_conf_threshold = max(0, min(1, float(request.form.get("low_conf_threshold", "0.75") or 0.75)))
         except ValueError:
-            return jsonify({"error": "DPI、OCR 并发、AI 并发和限页必须是数字"}), 400
+            return jsonify({"error": "DPI、OCR 并发、AI 并发、低置信阈值和限页必须是数字"}), 400
         model = request.form.get("vlm_model") or DEFAULT_VLM_MODEL
         model = model if model in VLM_MODELS else DEFAULT_VLM_MODEL
 
@@ -94,6 +95,8 @@ def create_app():
             "workers": workers,
             "vlm_workers": vlm_workers,
             "max_pages": max_pages,
+            "ocr_reorder": request.form.get("ocr_reorder") == "on",
+            "low_conf_threshold": low_conf_threshold,
             "auto_vlm_candidates": request.form.get("auto_vlm_candidates") == "on",
             "vlm_model": model,
             "ocr_intra_threads": OCR_INTRA_THREADS,
@@ -109,7 +112,11 @@ def create_app():
             "page_results": [],
             "vlm_results": {},
         })
-        threading.Thread(target=ocr.process_job, args=(job_id, pdf_path, keywords, dpi, workers, max_pages), daemon=True).start()
+        threading.Thread(
+            target=ocr.process_job,
+            args=(job_id, pdf_path, keywords, dpi, workers, max_pages, request.form.get("ocr_reorder") == "on", low_conf_threshold),
+            daemon=True,
+        ).start()
         return jsonify({"job_id": job_id})
 
     @app.post("/api/jobs/<job_id>/stop")
@@ -156,6 +163,25 @@ def create_app():
             ok, message = vlm.schedule(job_id, page_no)
             results.append({"page": page_no, "ok": ok, "status": message})
         return jsonify({"ok": any(r["ok"] for r in results), "results": results})
+
+    @app.post("/api/jobs/<job_id>/ocr/<int:page_no>/rerun")
+    def rerun_ocr_page(job_id, page_no):
+        ocr, _ = get_services()
+        job = store.load(job_id)
+        if not job:
+            return jsonify({"error": "任务不存在"}), 404
+        try:
+            dpi = max(120, min(260, int((request.json or {}).get("dpi", job.get("dpi", 180)) or 180)))
+            low_conf_threshold = max(0, min(1, float((request.json or {}).get("low_conf_threshold", job.get("low_conf_threshold", 0.75)) or 0.75)))
+        except ValueError:
+            return jsonify({"error": "DPI 和低置信阈值必须是数字"}), 400
+        keywords = parse_keywords((request.json or {}).get("keywords") or ",".join(job.get("keywords") or []))
+        reorder = bool((request.json or {}).get("ocr_reorder", job.get("ocr_reorder", False)))
+        try:
+            result = ocr.rerun_page(job_id, page_no, dpi, keywords, reorder, low_conf_threshold)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify({"ok": True, "page": result})
 
     @app.post("/api/jobs/<job_id>/vlm/<int:page_no>")
     def start_vlm(job_id, page_no):
@@ -221,6 +247,8 @@ def run_smoke(pdf, pages, dpi, workers):
         "workers": workers,
         "vlm_workers": 2,
         "max_pages": pages,
+        "ocr_reorder": False,
+        "low_conf_threshold": 0.75,
         "auto_vlm_candidates": False,
         "vlm_model": DEFAULT_VLM_MODEL,
         "ocr_intra_threads": OCR_INTRA_THREADS,

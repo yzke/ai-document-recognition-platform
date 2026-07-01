@@ -25,6 +25,10 @@
         <div><label>DPI</label><input name="dpi" type="number" value="180" min="120" max="260"></div>
         <div><label>OCR 并发</label><input name="workers" type="number" value="6" min="1" max="12"></div>
       </div>
+      <div class="row">
+        <div><label>低置信阈值</label><input name="low_conf_threshold" type="number" value="0.75" min="0" max="1" step="0.05"></div>
+        <label class="check"><input name="ocr_reorder" type="checkbox">OCR 坐标重排</label>
+      </div>
       <label>AI 并发</label>
       <input name="vlm_workers" type="number" value="2" min="1" max="12">
       <label>VLM 模型</label>
@@ -83,7 +87,7 @@
         </div>
         <div class="viewer">
           <div class="tabs">
-            <div class="tabgroup"><button id="runVlm" class="secondary" type="button" disabled>AI 提取选中页</button><button id="ocrTab" class="active" type="button">文本识别结果</button><button id="vlmTab" type="button">AI 提取结果</button></div>
+            <div class="tabgroup"><button id="runVlm" class="secondary" type="button" disabled>AI 提取选中页</button><button id="rerunOcr" class="ghost" type="button" disabled>重跑本页 OCR</button><button id="ocrTab" class="active" type="button">文本识别结果</button><button id="vlmTab" type="button">AI 提取结果</button></div>
             <span id="vlmStatus" class="muted small">大模型未配置，仅支持文本识别</span>
           </div>
           <div class="split">
