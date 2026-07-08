@@ -2,6 +2,7 @@ import json
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from pathlib import Path
 
 import fitz
 from rapidocr_onnxruntime import RapidOCR
@@ -11,9 +12,10 @@ from .page_ranges import parse_page_range
 
 
 class OcrService:
-    def __init__(self, store, schedule_vlm):
+    def __init__(self, store, schedule_vlm, audit=None):
         self.store = store
         self.schedule_vlm = schedule_vlm
+        self.audit = audit
         self._engine = None
         self._lock = threading.Lock()
 
@@ -160,6 +162,12 @@ class OcrService:
                         if future.cancelled():
                             continue
                         result = future.result()
+                        if self.audit:
+                            self.audit.write(job_id, "ocr_done", result["page"], detail={
+                                "chars": result.get("chars", 0),
+                                "avg_score": result.get("avg_score", 0),
+                                "low_conf_count": result.get("low_conf_count", 0),
+                            })
                         results.append(result)
                         results.sort(key=lambda item: item["page"])
                         candidates = [r["page"] for r in results if r["candidate"]]

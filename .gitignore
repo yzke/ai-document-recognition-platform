@@ -7,3 +7,5 @@ venv/
 data/
 uploads/
 *.pdf
+bench_pages/
+ARCHITECTURE.md

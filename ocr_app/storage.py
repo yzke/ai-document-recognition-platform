@@ -86,6 +86,38 @@ class JobStore:
                 self.jobs[job_id]["finished_at"] = time.time()
             self.save(job_id)
 
+    def update_extracted(self, job_id, page_no, summary):
+        with self.lock:
+            job = self.jobs[job_id]
+            results = dict(job.get("extracted_results") or {})
+            current = dict(results.get(str(page_no)) or {})
+            current.update(summary)
+            current["page"] = page_no
+            results[str(page_no)] = current
+            summary_counts = {"auto_approve": 0, "human_review": 0, "rejected": 0, "failed": 0}
+            low_confidence_fields = {}
+            rule_hits = {}
+            for item in results.values():
+                routing = item.get("routing")
+                status = item.get("status")
+                if status == "failed":
+                    summary_counts["failed"] += 1
+                elif routing in summary_counts:
+                    summary_counts[routing] += 1
+                for field in item.get("low_confidence_fields") or []:
+                    low_confidence_fields[field] = low_confidence_fields.get(field, 0) + 1
+                for code, count in (item.get("rule_hits") or {}).items():
+                    rule_hits[code] = rule_hits.get(code, 0) + int(count or 0)
+            job["extracted_results"] = results
+            job["extraction_summary"] = summary_counts
+            job["quality_summary"] = {
+                "routing": summary_counts,
+                "low_confidence_fields": low_confidence_fields,
+                "rule_hits": rule_hits,
+            }
+            job["updated_at"] = time.time()
+            self.save(job_id)
+
     def set_cancelled(self, job_id):
         self.cancel_events.setdefault(job_id, threading.Event()).set()
 

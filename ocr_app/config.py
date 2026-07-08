@@ -17,7 +17,12 @@ OCR_INTRA_THREADS = max(1, int(os.environ.get("OCR_INTRA_THREADS", "2")))
 OCR_INTER_THREADS = max(1, int(os.environ.get("OCR_INTER_THREADS", "1")))
 
 SILICONFLOW_API_URL = "https://api.siliconflow.cn/v1/chat/completions"
-DEFAULT_VLM_MODEL = "Qwen/Qwen3-VL-32B-Thinking"
+VLM_TIMEOUT_SECONDS = max(60, int(os.environ.get("VLM_TIMEOUT_SECONDS", "420")))
+VLM_MAX_TOKENS = max(512, int(os.environ.get("VLM_MAX_TOKENS", "2048")))
+EXTRACTION_TIMEOUT_SECONDS = max(30, int(os.environ.get("EXTRACTION_TIMEOUT_SECONDS", "120")))
+EXTRACTION_MAX_TOKENS = max(512, int(os.environ.get("EXTRACTION_MAX_TOKENS", "2048")))
+EXTRACTION_MODEL = os.environ.get("EXTRACTION_MODEL", "Qwen/Qwen3-VL-32B-Instruct")
+DEFAULT_VLM_MODEL = os.environ.get("DEFAULT_VLM_MODEL", "Qwen/Qwen3-VL-32B-Instruct")
 VLM_MODELS = [
     "Qwen/Qwen3-VL-32B-Thinking",
     "Qwen/Qwen3-VL-32B-Instruct",

@@ -57,7 +57,7 @@
         <div class="keyword-field"><label>本文件筛选关键词</label><input id="keywords" class="keywordbox" form="form" name="keywords" list="keywordHistory" value="{{ default_keywords }}"><datalist id="keywordHistory"></datalist></div>
         <div class="range-field"><label>页码范围</label><input form="form" name="page_range" placeholder="例如 1,2-3,5-15"></div>
         <div class="auto-field"><label>AI 提取</label><label class="check inline-check"><input form="form" name="auto_vlm_candidates" type="checkbox">命中页自动 AI 识别</label></div>
-        <div class="actions file-actions"><button id="submit" form="form">上传并识别</button><button id="stop" class="danger" type="button" disabled>停止任务</button><a id="download" style="display:none" href="#">下载全文 OCR</a></div>
+        <div class="actions file-actions"><button id="submit" form="form">上传并识别</button><button id="stop" class="danger" type="button" disabled>停止任务</button><a id="download" style="display:none" href="#">下载全文 OCR</a><a id="exportJson" style="display:none" href="#" download="export.json">导出结构化 JSON</a></div>
       </div>
       <div class="meta">
         <div class="metric"><span class="muted small">文件</span><b id="fileName">未上传</b></div>
@@ -68,6 +68,7 @@
       </div>
       <div class="bar"><div id="progress"></div></div>
       <div id="jobline" class="muted small">等待上传</div>
+      <div id="qualitySummary" class="quality-summary" style="display:none"></div>
     </section>
 
     <section>
@@ -87,7 +88,7 @@
         </div>
         <div class="viewer">
           <div class="tabs">
-            <div class="tabgroup"><button id="runVlm" class="secondary" type="button" disabled>AI 提取选中页</button><button id="rerunOcr" class="ghost" type="button" disabled>重跑本页 OCR</button><button id="ocrTab" class="active" type="button">文本识别结果</button><button id="vlmTab" type="button">AI 提取结果</button></div>
+            <div class="tabgroup"><button id="runVlm" class="secondary" type="button" disabled>AI 提取选中页</button><button id="rerunOcr" class="ghost" type="button" disabled>重跑本页 OCR</button><button id="ocrTab" class="active" type="button">OCR 文本</button><button id="vlmTab" type="button">AI 报告</button><button id="structuredTab" type="button">结构化审核</button></div>
             <span id="vlmStatus" class="muted small">大模型未配置，仅支持文本识别</span>
           </div>
           <div class="split">

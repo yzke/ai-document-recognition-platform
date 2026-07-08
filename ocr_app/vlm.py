@@ -7,7 +7,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .config import DEFAULT_VLM_MODEL, MAX_WORKERS, PAGE_DIR_NAME, SILICONFLOW_API_URL, TEXT_DIR_NAME, VLM_DIR_NAME
+from .config import DEFAULT_VLM_MODEL, MAX_WORKERS, PAGE_DIR_NAME, SILICONFLOW_API_URL, TEXT_DIR_NAME, VLM_DIR_NAME, VLM_MAX_TOKENS, VLM_TIMEOUT_SECONDS
 
 VLM_PROMPT = """请作为“文档字段核对助手”处理这页扫描件。
 
@@ -39,9 +39,11 @@ VLM_PROMPT = """请作为“文档字段核对助手”处理这页扫描件。
 
 
 class VlmService:
-    def __init__(self, store, render_page):
+    def __init__(self, store, render_page, audit=None, extraction=None):
         self.store = store
         self.render_page = render_page
+        self.audit = audit
+        self.extraction = extraction
         self.executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
 
     def get_api_key(self, job):
@@ -52,6 +54,9 @@ class VlmService:
             return max(1, min(MAX_WORKERS, int(job.get("vlm_workers", 2) or 2)))
         except (TypeError, ValueError):
             return 2
+
+    def is_stale_running(self, item):
+        return item.get("status") == "running" and time.time() - float(item.get("updated_at") or 0) > VLM_TIMEOUT_SECONDS + 60
 
     def page_ocr_text(self, job_id, page_no):
         text_path = self.store.job_path(job_id) / TEXT_DIR_NAME / f"page_{page_no:04d}.txt"
@@ -117,7 +122,7 @@ class VlmService:
                 {"type": "text", "text": prompt},
             ]}],
             "temperature": 0,
-            "max_tokens": 4096,
+            "max_tokens": VLM_MAX_TOKENS,
         }
         req = urllib.request.Request(
             SILICONFLOW_API_URL,
@@ -125,7 +130,7 @@ class VlmService:
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=240) as resp:
+        with urllib.request.urlopen(req, timeout=VLM_TIMEOUT_SECONDS) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data.get("choices", [{}])[0].get("message", {}).get("content", ""), data.get("usage", {})
 
@@ -159,11 +164,19 @@ class VlmService:
             }
             (self.store.job_path(job_id) / VLM_DIR_NAME / f"page_{page_no:04d}.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
             self.set_state(job_id, page_no, result)
+            if self.audit:
+                self.audit.write(job_id, "vlm_done", page_no, detail={"review_required": review_required, "seconds": result["seconds"]})
+            if self.extraction:
+                self.extraction.schedule(job_id, page_no)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")[:1000]
             self.set_state(job_id, page_no, {"status": "failed", "model": model, "message": f"HTTP {exc.code}: {detail}"})
+            if self.audit:
+                self.audit.write(job_id, "vlm_failed", page_no, detail={"model": model, "message": f"HTTP {exc.code}: {detail}"})
         except Exception as exc:
             self.set_state(job_id, page_no, {"status": "failed", "model": model, "message": str(exc)[:1000]})
+            if self.audit:
+                self.audit.write(job_id, "vlm_failed", page_no, detail={"model": model, "message": str(exc)[:1000]})
 
     def run_page_then_dispatch(self, job_id, page_no):
         try:
@@ -181,6 +194,11 @@ class VlmService:
             if not job:
                 return
             results = job.setdefault("vlm_results", {})
+            for page, item in list(results.items()):
+                if self.is_stale_running(item):
+                    stale = dict(item)
+                    stale.update({"status": "failed", "message": "AI 提取超时，可重新提交", "updated_at": time.time()})
+                    results[page] = stale
             limit = self.job_limit(job)
             running = sum(1 for item in results.values() if item.get("status") == "running")
             slots = max(0, limit - running)
@@ -211,6 +229,10 @@ class VlmService:
         with self.store.lock:
             results = self.store.jobs[job_id].setdefault("vlm_results", {})
             current = results.get(str(page_no), {})
+            if self.is_stale_running(current):
+                current = dict(current)
+                current.update({"status": "failed", "message": "AI 提取超时，可重新提交", "updated_at": time.time()})
+                results[str(page_no)] = current
             if current.get("status") in {"queued", "running", "done"}:
                 return True, current.get("status")
             results[str(page_no)] = {"status": "queued", "message": "已加入 AI 提取队列", "updated_at": time.time()}

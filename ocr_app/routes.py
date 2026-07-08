@@ -18,21 +18,29 @@ from .config import (
     TEXT_DIR_NAME,
     VLM_MODELS,
 )
+from .audit import AuditLog
+from .export import ExportService
+from .extraction import ExtractionService
 from .ocr import OcrService
+from .review_samples import ReviewSamples
 from .storage import JobStore, get_keyword_history, parse_keywords, record_keyword_history, safe_name
 from .vlm import VlmService
 
 store = JobStore()
 ocr_service = None
 vlm_service = None
+audit_log = AuditLog(store)
+review_samples = ReviewSamples(store)
+extraction_service = ExtractionService(store, audit_log, review_samples)
+export_service = ExportService(store, audit_log)
 
 
 def get_services():
     global ocr_service, vlm_service
     if ocr_service is None:
         # VLM needs OCR rendering; OCR needs VLM scheduling. Wire after both exist.
-        ocr_service = OcrService(store, lambda job_id, page_no: vlm_service.schedule(job_id, page_no))
-        vlm_service = VlmService(store, ocr_service.render_page)
+        ocr_service = OcrService(store, lambda job_id, page_no: vlm_service.schedule(job_id, page_no), audit_log)
+        vlm_service = VlmService(store, ocr_service.render_page, audit_log, extraction_service)
     return ocr_service, vlm_service
 
 
@@ -111,6 +119,9 @@ def create_app():
             "candidate_pages": [],
             "page_results": [],
             "vlm_results": {},
+            "extracted_results": {},
+            "extraction_summary": {"auto_approve": 0, "human_review": 0, "rejected": 0, "failed": 0},
+            "quality_summary": {"routing": {"auto_approve": 0, "human_review": 0, "rejected": 0, "failed": 0}, "low_confidence_fields": {}, "rule_hits": {}},
         })
         threading.Thread(
             target=ocr.process_job,
@@ -202,6 +213,66 @@ def create_app():
             return jsonify({"error": "任务不存在"}), 404
         return jsonify((job.get("vlm_results") or {}).get(str(page_no), {"status": "none", "message": "未识别"}))
 
+    @app.get("/api/jobs/<job_id>/pages/<int:page_no>/extracted")
+    def get_extracted(job_id, page_no):
+        if not store.load(job_id):
+            return jsonify({"error": "任务不存在"}), 404
+        return jsonify(extraction_service.load_result(job_id, page_no))
+
+    @app.post("/api/jobs/<job_id>/pages/<int:page_no>/extract")
+    def run_extracted(job_id, page_no):
+        if not store.load(job_id):
+            return jsonify({"error": "任务不存在"}), 404
+        result = extraction_service.run_page(job_id, page_no)
+        return jsonify(result or {"error": "结构化提取失败"}), 200 if result else 400
+
+    @app.patch("/api/jobs/<job_id>/pages/<int:page_no>/fields")
+    def update_fields(job_id, page_no):
+        if not store.load(job_id):
+            return jsonify({"error": "任务不存在"}), 404
+        try:
+            payload = request.json or {}
+            result = extraction_service.update_fields(job_id, page_no, payload.get("fields") or {}, payload.get("reason", ""))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(result)
+
+    @app.post("/api/jobs/<job_id>/pages/<int:page_no>/approve")
+    def approve_page(job_id, page_no):
+        if not store.load(job_id):
+            return jsonify({"error": "任务不存在"}), 404
+        try:
+            return jsonify(extraction_service.set_manual_status(job_id, page_no, "approved", (request.json or {}).get("reason", "")))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/jobs/<job_id>/pages/<int:page_no>/reject")
+    def reject_page(job_id, page_no):
+        if not store.load(job_id):
+            return jsonify({"error": "任务不存在"}), 404
+        try:
+            return jsonify(extraction_service.set_manual_status(job_id, page_no, "rejected", (request.json or {}).get("reason", "")))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.get("/api/jobs/<job_id>/audit")
+    def get_audit(job_id):
+        if not store.load(job_id):
+            return jsonify({"error": "任务不存在"}), 404
+        return jsonify({"events": audit_log.read(job_id)})
+
+    @app.get("/api/review-samples")
+    def get_review_samples():
+        return jsonify({"items": review_samples.read()})
+
+    @app.get("/api/jobs/<job_id>/export")
+    def export_job(job_id):
+        include_review = request.args.get("include_review") == "1"
+        try:
+            return jsonify(export_service.export_job(job_id, include_review))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 404
+
     @app.get("/job/<job_id>/text/<int:page_no>")
     def get_page_text(job_id, page_no):
         text_path = store.job_path(job_id) / TEXT_DIR_NAME / f"page_{page_no:04d}.txt"
@@ -263,6 +334,9 @@ def run_smoke(pdf, pages, dpi, workers):
         "candidate_pages": [],
         "page_results": [],
         "vlm_results": {},
+        "extracted_results": {},
+        "extraction_summary": {"auto_approve": 0, "human_review": 0, "rejected": 0, "failed": 0},
+        "quality_summary": {"routing": {"auto_approve": 0, "human_review": 0, "rejected": 0, "failed": 0}, "low_confidence_fields": {}, "rule_hits": {}},
     })
     ocr.process_job(job_id, pdf_path, keywords, dpi, workers, pages)
     print(json.dumps(store.public_job(store.load(job_id)), ensure_ascii=False, indent=2))
