@@ -65,6 +65,7 @@
       <div class="walk-panels">
         <article class="walk-panel active">
           <div class="panel-title"><span>01</span><div><h3>文档输入</h3><p>创建 job，保存 PDF，解析关键词、页码范围和并发参数。</p></div></div>
+          <div class="stage-path"><span>PDF + 关键词</span><i></i><span>创建 Job</span><i></i><span>state.json</span></div>
           <div class="panel-grid">
             <div><b>输入</b><p>PDF、关键词、页码范围、DPI、OCR/VLM 并发、模型选择、API Key。</p></div>
             <div><b>处理</b><p><code>POST /api/jobs</code> 清洗文件名，创建 <code>state.json</code>，启动 OCR 线程。</p></div>
@@ -75,6 +76,7 @@
 
         <article class="walk-panel">
           <div class="panel-title"><span>02</span><div><h3>OCR 提取</h3><p>把页面渲染成图片，并生成精确字符串池、坐标和置信度。</p></div></div>
+          <div class="stage-path"><span>PDF 页面</span><i></i><span>渲染 + OCR</span><i></i><span>文本/坐标/置信度</span></div>
           <div class="panel-grid">
             <div><b>输入</b><p>原始 PDF、页码范围、DPI、OCR 重排开关、低置信阈值。</p></div>
             <div><b>处理</b><p>PyMuPDF 渲染页面，RapidOCR 识别文字块，按关键词筛选候选页。</p></div>
@@ -85,6 +87,7 @@
 
         <article class="walk-panel">
           <div class="panel-title"><span>03</span><div><h3>VLM 理解</h3><p>把页面图片和 OCR 文本一起交给视觉模型做图文互校。</p></div></div>
+          <div class="stage-path"><span>页面图片 + OCR</span><i></i><span>视觉理解</span><i></i><span>复核报告</span></div>
           <div class="panel-grid">
             <div><b>输入</b><p>页面 PNG、OCR 文本、用户关键词、VLM prompt。</p></div>
             <div><b>处理</b><p>Qwen3-VL 看图判断版式、字段含义和归属，值优先从 OCR 文本中选。</p></div>
@@ -95,6 +98,7 @@
 
         <article class="walk-panel">
           <div class="panel-title"><span>04</span><div><h3>结构化提取</h3><p>根据关键词模板生成候选值，而不是直接生成最终答案。</p></div></div>
+          <div class="stage-path"><span>模板 + 文本</span><i></i><span>候选抽取</span><i></i><span>结构合法 JSON</span></div>
           <div class="panel-grid">
             <div><b>输入</b><p>关键词模板、VLM 复核报告、OCR 文本、结构化 prompt。</p></div>
             <div><b>处理</b><p>DeepSeek-V4-Flash 输出 <code>template_fields[].candidates[]</code>；JSON Schema 做结构约束。</p></div>
@@ -105,6 +109,7 @@
 
         <article class="walk-panel">
           <div class="panel-title"><span>05</span><div><h3>业务规则校验</h3><p>在结构合法之后，判断候选和值是否需要人工复核。</p></div></div>
+          <div class="stage-path"><span>候选/最终值</span><i></i><span>硬规则校验</span><i></i><span>validation + final_fields</span></div>
           <div class="panel-grid">
             <div><b>输入</b><p><code>template_fields</code>、候选列表、<code>final_value</code>、历史页结果。</p></div>
             <div><b>处理</b><p>检查缺失候选、多候选、低置信、语义不匹配、金额/日期/税号/重复发票号。</p></div>
@@ -115,6 +120,7 @@
 
         <article class="walk-panel">
           <div class="panel-title"><span>06</span><div><h3>置信度路由</h3><p>把每页送到自动通过、人工复核或拒绝。</p></div></div>
+          <div class="stage-path"><span>规则结果</span><i></i><span>路由决策</span><i></i><span>自动/人工/拒绝</span></div>
           <div class="panel-grid">
             <div><b>输入</b><p>规则错误、规则警告、低置信字段、最终字段数量、人工状态。</p></div>
             <div><b>处理</b><p>计算 <code>routing</code>：<code>auto_approve</code>、<code>human_review</code>、<code>rejected</code>。</p></div>
@@ -125,6 +131,7 @@
 
         <article class="walk-panel">
           <div class="panel-title"><span>07</span><div><h3>人工复核</h3><p>人选择候选或手动填写，最终生成固定关键词 JSON。</p></div></div>
+          <div class="stage-path"><span>候选 + 证据</span><i></i><span>人工确认</span><i></i><span>最终 JSON</span></div>
           <div class="panel-grid">
             <div><b>输入</b><p>候选值、OCR bbox、规则原因、VLM 报告、人工处理原因。</p></div>
             <div><b>处理</b><p>候选默认选第一个；再次点击取消；保存后写入 <code>final_value</code>，通过后设置人工状态。</p></div>
@@ -140,8 +147,9 @@
       </div>
     </section>
 
-    <section class="section">
-      <h2>目录</h2>
+    <section class="section compact-section">
+      <h2>详细参考</h2>
+      <p class="muted">下面的内容默认折叠，适合技术人员展开查看文件产物、Schema、提示词和核心代码。</p>
       <div class="toc">
         <a href="#pipeline">1. 七层处理管道</a>
         <a href="#runtime">2. 运行时数据流</a>
