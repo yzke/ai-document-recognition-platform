@@ -258,7 +258,7 @@ class ExtractionService:
             return result
 
         ocr_text = self.page_ocr_text(job_id, page_no)
-        model = EXTRACTION_MODEL
+        model = job.get("extraction_model") or EXTRACTION_MODEL
         last_error = ""
         for attempt in range(3):
             try:

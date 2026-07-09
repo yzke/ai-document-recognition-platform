@@ -35,6 +35,9 @@
       <select name="vlm_model">
         {% for model in models %}<option {% if model == default_model %}selected{% endif %}>{{ model }}</option>{% endfor %}
       </select>
+      <label>结构化模型</label>
+      <input name="extraction_model" list="extractionModels" value="{{ default_extraction_model }}" placeholder="例如 deepseek-ai/DeepSeek-V4-Flash">
+      <datalist id="extractionModels">{% for model in extraction_models %}<option value="{{ model }}"></option>{% endfor %}</datalist>
       <label>SiliconFlow API Key</label>
       <input name="api_key" type="password" placeholder="配置后启用 AI 提取">
       <label class="check"><input name="save_api_key" type="checkbox">本机保存 API Key（不提交 Git）</label>

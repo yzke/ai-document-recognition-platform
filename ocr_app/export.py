@@ -14,6 +14,8 @@ class ExportService:
         if not job:
             raise ValueError("任务不存在")
         pages = []
+        final_fields = {}
+        has_template_result = False
         extracted_dir = self.store.job_path(job_id) / EXTRACT_DIR_NAME
         for path in sorted(extracted_dir.glob("page_*.json")) if extracted_dir.exists() else []:
             try:
@@ -26,28 +28,34 @@ class ExportService:
             if not approved and not include_review:
                 continue
             if item.get("template_fields"):
+                has_template_result = True
                 fields = {
                     key: field.get("final_value", "")
                     for key, field in (item.get("template_fields") or {}).items()
                     if isinstance(field, dict)
                 }
-                review_fields = item.get("template_fields") or {}
+                for key, value in fields.items():
+                    if value and not final_fields.get(key):
+                        final_fields[key] = value
+                if not include_review:
+                    continue
             else:
                 fields = {
                     key: field.get("value", "")
                     for key, field in (item.get("fields") or {}).items()
                     if isinstance(field, dict)
                 }
-                review_fields = item.get("fields") or {}
             pages.append({
                 "page_no": item.get("page_no"),
                 "doc_type": item.get("doc_type"),
                 "routing": routing,
                 "fields": fields,
-                "template_fields": review_fields if include_review else None,
                 "confidence": item.get("extraction_confidence", 0),
                 "needs_human_review": routing == "human_review",
             })
+        if has_template_result:
+            self.audit.write(job_id, "export", detail={"pages": len(pages), "include_review": include_review, "template_final": True})
+            return final_fields
         payload = {
             "export_time": datetime.now().isoformat(timespec="seconds"),
             "job_id": job_id,

@@ -22,7 +22,7 @@ VLM_TIMEOUT_SECONDS = max(60, int(os.environ.get("VLM_TIMEOUT_SECONDS", "420")))
 VLM_MAX_TOKENS = max(512, int(os.environ.get("VLM_MAX_TOKENS", "2048")))
 EXTRACTION_TIMEOUT_SECONDS = max(30, int(os.environ.get("EXTRACTION_TIMEOUT_SECONDS", "120")))
 EXTRACTION_MAX_TOKENS = max(512, int(os.environ.get("EXTRACTION_MAX_TOKENS", "2048")))
-EXTRACTION_MODEL = os.environ.get("EXTRACTION_MODEL", "Qwen/Qwen3-VL-32B-Instruct")
+EXTRACTION_MODEL = os.environ.get("EXTRACTION_MODEL", "deepseek-ai/DeepSeek-V4-Flash")
 DEFAULT_VLM_MODEL = os.environ.get("DEFAULT_VLM_MODEL", "Qwen/Qwen3-VL-32B-Instruct")
 VLM_MODELS = [
     "Qwen/Qwen3-VL-32B-Thinking",
@@ -31,4 +31,10 @@ VLM_MODELS = [
     "Qwen/Qwen3-VL-30B-A3B-Instruct",
     "PaddlePaddle/PaddleOCR-VL-1.5",
     "deepseek-ai/DeepSeek-OCR",
+]
+EXTRACTION_MODELS = [
+    "deepseek-ai/DeepSeek-V4-Flash",
+    "deepseek-ai/DeepSeek-V4-Pro",
+    "deepseek-ai/DeepSeek-V3.1",
+    "Qwen/Qwen3-VL-32B-Instruct",
 ]
