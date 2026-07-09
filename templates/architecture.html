@@ -47,14 +47,17 @@
       <div class="toc">
         <a href="#pipeline">1. 七层处理管道</a>
         <a href="#runtime">2. 运行时数据流</a>
-        <a href="#contracts">3. JSON 与数据契约</a>
-        <a href="#constraints">4. 约束与兜底</a>
-        <a href="#qa">5. 企业问答版说明</a>
-        <a href="#prompts">6. 提示词设计</a>
-        <a href="#schema">7. Schema 与自愈</a>
-        <a href="#code">8. 核心代码</a>
-        <a href="#review">9. 人工复核闭环</a>
-        <a href="#limits">10. 当前边界</a>
+        <a href="#artifacts">3. 文件产物详解</a>
+        <a href="#final-json">4. 最终 JSON 生成</a>
+        <a href="#contracts">5. JSON 与数据契约</a>
+        <a href="#constraints">6. 约束与兜底</a>
+        <a href="#qa">7. 企业问答版说明</a>
+        <a href="#prompts">8. 提示词设计</a>
+        <a href="#schema">9. Schema 与自愈</a>
+        <a href="#code">10. 核心代码</a>
+        <a href="#review">11. 人工复核闭环</a>
+        <a href="#api">12. API 与操作</a>
+        <a href="#limits">13. 当前边界</a>
       </div>
     </section>
 
@@ -83,8 +86,150 @@
       </div>
     </section>
 
+    <section id="artifacts" class="section">
+      <h2>3. 文件产物详解</h2>
+      <p>系统按 job 隔离所有运行时文件。一个任务会落在 <code>data/jobs/&lt;job_id&gt;/</code> 目录下。私密 API Key 不写入这里，重启后从本机 <code>local_settings.json</code> 读取。</p>
+      <h3>目录结构</h3>
+      <pre><code>data/
+  jobs/
+    20260709_131500_ab12cd34/
+      state.json
+      upload.pdf
+      full_text.txt
+      pages/
+        page_0001.png
+      texts/
+        page_0001.txt
+        page_0001.json
+      vlm/
+        page_0001.json
+      extracted/
+        page_0001.json
+      audit.jsonl
+  keyword_history.json
+  review_samples.jsonl</code></pre>
+      <h3>每个文件的作用</h3>
+      <table>
+        <thead><tr><th>文件/目录</th><th>由谁生成</th><th>内容</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td><code>state.json</code></td><td><code>JobStore.save()</code></td><td>任务公开状态、页数、OCR 结果摘要、VLM 结果摘要、结构化摘要、质量汇总。</td><td>前端轮询 <code>/api/jobs/&lt;job_id&gt;</code> 的主要数据源；也用于历史列表恢复。</td></tr>
+          <tr><td><code>upload.pdf</code></td><td><code>POST /api/jobs</code></td><td>用户上传 PDF，文件名经过 <code>safe_name()</code> 清洗。</td><td>后续页面渲染、OCR 重跑、VLM 图片输入都依赖原始 PDF。</td></tr>
+          <tr><td><code>pages/page_0001.png</code></td><td><code>OcrService.render_page()</code></td><td>PyMuPDF 按 DPI 渲染出的单页图片。</td><td>前端预览、VLM 图片输入、bbox 高亮底图。</td></tr>
+          <tr><td><code>texts/page_0001.txt</code></td><td>OCR 阶段</td><td>本页 OCR 纯文本。</td><td>作为 VLM 底稿和结构化提取的文本输入。</td></tr>
+          <tr><td><code>texts/page_0001.json</code></td><td>OCR 阶段</td><td>OCR 块数组，包含文本、坐标、置信度。</td><td>为候选值挂载 <code>ocr_value</code>、<code>ocr_score</code>、<code>bbox</code>，供人工定位核验。</td></tr>
+          <tr><td><code>full_text.txt</code></td><td>OCR 阶段</td><td>所有页面 OCR 文本拼接。</td><td>下载全文 OCR、调试 OCR 覆盖情况。</td></tr>
+          <tr><td><code>vlm/page_0001.json</code></td><td><code>VlmService.run_page()</code></td><td>VLM 复核报告、模型名、耗时、usage、是否需要人工复核。</td><td>结构化提取的上游语义输入；也用于前端“AI 美化展示”。</td></tr>
+          <tr><td><code>extracted/page_0001.json</code></td><td><code>ExtractionService.save_result()</code></td><td>结构化结果、候选、Schema 结构约束结果、规则结果、路由、最终字段。</td><td>人工审核、最终 JSON 导出、审计导出、质量汇总。</td></tr>
+          <tr><td><code>audit.jsonl</code></td><td><code>AuditLog</code></td><td>OCR/VLM/结构化/人工审核/导出等事件流水。</td><td>排障、回放、审计。</td></tr>
+          <tr><td><code>data/review_samples.jsonl</code></td><td><code>ReviewSamples.write_field_change()</code></td><td>人工修改样本：候选列表、模型值、人工值、OCR 文本、VLM 报告。</td><td>后续 few-shot、规则优化、字段同义词表和训练数据。</td></tr>
+          <tr><td><code>data/keyword_history.json</code></td><td><code>record_keyword_history()</code></td><td>最近使用过的关键词组合。</td><td>前端关键词输入联想。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>state.json 关键字段</h3>
+      <table>
+        <thead><tr><th>字段</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td><code>page_results</code></td><td>OCR 页级摘要：页码、字数、命中关键词、平均置信度、低置信块数量、是否候选页。</td></tr>
+          <tr><td><code>vlm_results</code></td><td>VLM 页级状态：queued/running/done/failed、模型、复核文本、是否需要人工复核。</td></tr>
+          <tr><td><code>extracted_results</code></td><td>结构化页级摘要：routing、doc_type、confidence、低置信字段、规则命中。</td></tr>
+          <tr><td><code>extraction_summary</code></td><td>按路由聚合的页数：auto_approve、human_review、rejected、failed。</td></tr>
+          <tr><td><code>quality_summary</code></td><td>质量面板数据：路由分布、低置信字段统计、规则命中统计。</td></tr>
+          <tr><td><code>page_numbers</code></td><td>本任务实际处理的页码范围。VLM 批量提交会校验只能提交这些页。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="final-json" class="section">
+      <h2>4. 最终 JSON 是怎么生成的</h2>
+      <p class="note">核心结论：规则校验不是负责“填值”的模型步骤。AI 负责生成候选；程序可在极高置信强匹配时自动选择；人工审核可以选择候选或手动填写；业务规则负责判断这些值是否需要人工复核，并把已确认值汇总成 <code>final_fields</code>。</p>
+
+      <h3>数据对象之间的关系</h3>
+      <pre><code>用户关键词
+  ↓ build_template()
+template_fields["发票号"]              # 固定模板字段
+  ↓ LLM 只填 candidates[]
+candidates[]                          # 多个候选，不是最终答案
+  ↓ 自动强匹配 / 人工选择 / 手动填写
+final_value                           # 单个字段的最终确认值
+  ↓ validate_document()
+final_fields                          # 本页最终字段字典
+  ↓ ExportService.export_job()
+最终业务 JSON                          # 默认导出，只保留关键词和值</code></pre>
+
+      <h3>三个填值来源</h3>
+      <table>
+        <thead><tr><th>来源</th><th>什么时候发生</th><th>写入哪里</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>AI 候选</td><td>结构化提取阶段</td><td><code>template_fields[key].candidates[]</code></td><td>AI 不应该直接拍板最终值，主要提供候选值、识别成什么字段、置信度和证据。</td></tr>
+          <tr><td>程序自动选择</td><td>业务规则校验阶段</td><td><code>final_value</code>、<code>selected_candidate_index</code>、<code>review_status=auto_selected</code></td><td>只有一个候选、置信度 >= 0.9、且候选识别名和关键词语义强匹配时才自动填。</td></tr>
+          <tr><td>人工审核</td><td>人工复核阶段</td><td><code>final_value</code>、<code>manual_value</code>、<code>selected_candidate_index</code>、<code>review_status</code></td><td>人工可以选择候选，也可以手填。候选默认选第一个；再次点击已选候选会取消，保存后留空。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>自动选择逻辑</h3>
+      <pre><code># ocr_app/validation.py
+if not field.get("final_value") and len(candidates) == 1 and best and best.get("confidence", 0) >= 0.9:
+    recognized = (best.get("recognized_as") or "").replace(" ", "")
+    compact_name = str(name).replace(" ", "")
+    if compact_name and (compact_name in recognized or recognized in compact_name):
+        field["final_value"] = best.get("value", "")
+        field["selected_candidate_index"] = 0
+        field["review_status"] = "auto_selected"
+        best["selected"] = True</code></pre>
+
+      <h3>人工保存逻辑</h3>
+      <pre><code># ocr_app/extraction.py
+manual_value = str(value.get("manual_value") or "").strip()
+final_value = manual_value
+
+if not final_value and isinstance(selected, int) and 0 <= selected < len(candidates):
+    final_value = candidates[selected].get("value", "")
+    for idx, candidate in enumerate(candidates):
+        candidate["selected"] = idx == selected
+else:
+    for candidate in candidates:
+        candidate["selected"] = False
+
+current["selected_candidate_index"] = selected
+current["manual_value"] = manual_value
+current["final_value"] = final_value
+current["review_status"] = "manual" if manual_value else "accepted" if final_value else "pending"</code></pre>
+
+      <h3>规则校验后得到什么结果</h3>
+      <table>
+        <thead><tr><th>输出字段</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td><code>validation.errors</code></td><td>错误级规则结果，例如结构化失败或关键字段无法解析。</td></tr>
+          <tr><td><code>validation.warnings</code></td><td>警告级规则结果，例如多候选、语义不匹配、低置信。</td></tr>
+          <tr><td><code>validation.rules</code></td><td>完整规则命中列表，前端规则页展示。</td></tr>
+          <tr><td><code>validation.low_confidence_fields</code></td><td>低置信字段列表，用于质量汇总和路由。</td></tr>
+          <tr><td><code>routing</code></td><td>本页流向：auto_approve、human_review、rejected。</td></tr>
+          <tr><td><code>final_fields</code></td><td>只收集已有 <code>final_value</code> 的关键词字段，是默认导出的来源。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>导出逻辑</h3>
+      <pre><code># ocr_app/export.py
+if item.get("template_fields"):
+    fields = item.get("final_fields") if isinstance(item.get("final_fields"), dict) else {}
+    if not fields:
+        fields = {
+            key: field.get("final_value", "")
+            for key, field in (item.get("template_fields") or {}).items()
+            if isinstance(field, dict)
+        }
+    for key, value in fields.items():
+        if value and not final_fields.get(key):
+            final_fields[key] = value
+
+if has_template_result and not include_review:
+    return final_fields</code></pre>
+      <p class="warn note">所以回答你的问题：不是“规则校验完 AI 自动填到关键词 JSON”。更准确是：AI 先生成候选；程序/人工把某个候选或手填值写入 <code>final_value</code>；规则校验基于 <code>final_value</code> 生成 <code>final_fields</code> 和路由；最终导出只拿 <code>final_fields</code>。</p>
+    </section>
+
     <section id="contracts" class="section">
-      <h2>3. JSON 与数据契约</h2>
+      <h2>5. JSON 与数据契约</h2>
       <div class="grid two">
         <div class="card">
           <b>用户关键词模板</b>
@@ -127,7 +272,7 @@
     </section>
 
     <section id="constraints" class="section">
-      <h2>4. 约束、校验与兜底</h2>
+      <h2>6. 约束、校验与兜底</h2>
       <div class="grid four">
         <div class="card"><b>提示词约束</b><span>要求模型只输出 JSON，不要 Markdown，不要额外解释；字段必须来自用户关键词模板。</span></div>
         <div class="card"><b>JSON Schema 结构约束</b><span>只校验字段名、类型、候选数组、置信度范围、source 枚举和多余字段；不判断字段值是否业务正确。</span></div>
@@ -152,7 +297,7 @@ candidates.required: value, recognized_as, source, confidence, evidence</code></
     </section>
 
     <section id="qa" class="section">
-      <h2>5. 企业问答版说明</h2>
+      <h2>7. 企业问答版说明</h2>
       <div class="grid two">
         <div class="card">
           <b>问题一：多模态识别不可靠，后校验和兜底怎么做？</b>
@@ -220,7 +365,7 @@ candidates.required: value, recognized_as, source, confidence, evidence</code></
     </section>
 
     <section id="prompts" class="section">
-      <h2>6. 提示词设计</h2>
+      <h2>8. 提示词设计</h2>
       <h3>VLM 复核提示词：看图那一层</h3>
       <p>这一层的任务是图文互校，不是直接提取最终 JSON。输出故意使用自然语言报告，让视觉模型充分说明依据、差异和不确定点，后面再交给结构化提取层处理。</p>
       <pre><code>请作为“文档字段核对助手”处理这页扫描件。
@@ -303,7 +448,7 @@ prompt += "\n\nOCR 文本：\n" + (ocr_text or "")[:12000]</code></pre>
     </section>
 
     <section id="schema" class="section">
-      <h2>7. JSON Schema 结构约束与自愈重试</h2>
+      <h2>9. JSON Schema 结构约束与自愈重试</h2>
       <p class="note">这里的 JSON Schema 属于结构化提取阶段的格式和结构约束层。它保证模型输出可解析、字段完整、类型正确，但不判断发票号是否真实、金额是否应该选价税合计、日期是否和行程匹配。这些属于下一层业务规则和人工复核。</p>
       <h3>为什么先给模板，不让 LLM 设计结构</h3>
       <p>最有效的格式稳定手段，是在 prompt 里直接给完整 JSON 骨架，让 LLM 只负责填 candidates，不负责设计 key。不给骨架时，模型可能把“发票号”写成 <code>invoice_number</code>、<code>发票号码</code> 或自己新增字段。</p>
@@ -393,7 +538,7 @@ for attempt in range(3):
     </section>
 
     <section id="code" class="section">
-      <h2>8. 核心代码说明</h2>
+      <h2>10. 核心代码说明</h2>
       <div class="codegrid">
         <div>
           <h3>服务初始化</h3>
@@ -474,7 +619,7 @@ if has_template_result:
     </section>
 
     <section id="review" class="section">
-      <h2>9. 人工复核与样本沉淀</h2>
+      <h2>11. 人工复核与样本沉淀</h2>
       <div class="grid two">
         <div class="card">
           <b>人工复核页面做什么</b>
@@ -502,8 +647,8 @@ if has_template_result:
       <p class="note">这些样本后续可以用于 prompt 示例、规则权重调参、字段名同义词表、模型微调或回归测试。</p>
     </section>
 
-    <section class="section">
-      <h2>10. API 与操作逻辑</h2>
+    <section id="api" class="section">
+      <h2>12. API 与操作逻辑</h2>
       <table>
         <thead><tr><th>接口</th><th>作用</th><th>关键行为</th></tr></thead>
         <tbody>
@@ -518,7 +663,7 @@ if has_template_result:
     </section>
 
     <section id="limits" class="section">
-      <h2>11. 当前边界与后续可扩展点</h2>
+      <h2>13. 当前边界与后续可扩展点</h2>
       <div class="checklist">
         <div class="checkitem"><span class="tick">✓</span><div><b>已完成：关键词模板驱动</b><span class="muted">用户输入 N 个关键词，就生成 N 个固定字段的最终 JSON。</span></div></div>
         <div class="checkitem"><span class="tick">✓</span><div><b>已完成：候选证据层</b><span class="muted">候选值保留 OCR 文本、OCR 置信度、bbox 和证据说明。</span></div></div>
