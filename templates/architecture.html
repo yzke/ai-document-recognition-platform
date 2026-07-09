@@ -22,7 +22,7 @@
     <section class="hero">
       <div>
         <div class="eyebrow">Enterprise Document AI Pipeline</div>
-        <h2>从 PDF 到最终业务 JSON，不依赖单次模型输出，而是用 OCR、VLM、Schema、规则和人工复核组成稳定闭环。</h2>
+        <h2>从 PDF 到最终业务 JSON，不依赖单次模型输出，而是用 OCR、VLM、Schema 结构约束、业务规则和人工复核组成稳定闭环。</h2>
         <p>这个系统的目标不是让大模型直接“猜出最终答案”，而是把文档识别拆成可追踪、可校验、可人工介入的工程链路。用户输入一组关键词，系统为每个关键词生成固定 JSON 模板；AI 只负责寻找候选值；规则和人工审核负责决定最终值。</p>
         <p>最终导出的业务 JSON 只包含用户关键词对应的字段和值。OCR 坐标、证据、候选列表、置信度、路由原因都属于过程数据，用于展示、审计和人工确认，不进入默认最终 JSON。</p>
         <div class="badgebar">
@@ -30,14 +30,14 @@
           <span class="badge">RapidOCR</span>
           <span class="badge">Qwen3-VL</span>
           <span class="badge">DeepSeek-V4-Flash</span>
-          <span class="badge">JSON Schema</span>
-          <span class="badge">规则引擎</span>
+          <span class="badge">JSON Schema 结构约束</span>
+          <span class="badge">业务规则引擎</span>
           <span class="badge">人工复核</span>
         </div>
       </div>
       <div class="summary">
         <div><b>核心输入</b><span>PDF 文件、页码范围、关键词模板、OCR/VLM 并发、模型配置、本机 API Key。</span></div>
-        <div><b>核心中间产物</b><span>页面图片、OCR 文本与坐标、VLM 复核报告、关键词候选、Schema 校验结果、规则命中、路由状态。</span></div>
+        <div><b>核心中间产物</b><span>页面图片、OCR 文本与坐标、VLM 复核报告、关键词候选、Schema 结构约束结果、业务规则命中、路由状态。</span></div>
         <div><b>核心输出</b><span>默认导出纯最终 JSON；审计模式可导出页码、路由、置信度和人工状态。</span></div>
       </div>
     </section>
@@ -64,12 +64,12 @@
         <div class="step"><span class="step-no">01</span><b>文档输入</b><small>PyMuPDF</small><p>上传 PDF，解析页码范围，按 DPI 渲染每页图片，建立 job 状态和页面目录。</p></div>
         <div class="step"><span class="step-no">02</span><b>OCR 提取</b><small>RapidOCR</small><p>识别文字、坐标、置信度，生成全文 OCR、逐页文本和 OCR JSON。</p></div>
         <div class="step"><span class="step-no">03</span><b>VLM 理解</b><small>Qwen3-VL</small><p>把页面图片和 OCR 文本一起交给多模态模型，输出复核报告和差异说明。</p></div>
-        <div class="step"><span class="step-no">04</span><b>结构化提取</b><small>DeepSeek + JSON Schema</small><p>根据用户关键词生成模板，AI 为每个关键词归集候选值，不直接生成最终业务数据。</p></div>
-        <div class="step"><span class="step-no">05</span><b>规则校验</b><small>硬规则引擎</small><p>检查缺失候选、多候选、低置信、语义不匹配、金额/日期等规则。</p></div>
+        <div class="step"><span class="step-no">04</span><b>结构化提取</b><small>DeepSeek + Schema 结构约束</small><p>根据用户关键词生成模板，AI 为每个关键词归集候选值；Schema 只校字段、类型、必填项和枚举。</p></div>
+        <div class="step"><span class="step-no">05</span><b>业务规则校验</b><small>数据合理性校验</small><p>在结构合法之后，再检查缺失候选、多候选、低置信、语义不匹配、金额/日期等业务规则。</p></div>
         <div class="step"><span class="step-no">06</span><b>置信度路由</b><small>自动分流</small><p>根据规则错误、警告、低置信字段和人工状态决定自动通过、人工复核或拒绝。</p></div>
         <div class="step"><span class="step-no">07</span><b>人工复核</b><small>审计日志</small><p>人工选择候选或手动填写最终值，保存样本，生成固定字段最终 JSON。</p></div>
       </div>
-      <p class="note">设计原则：模型负责理解和候选生成，程序负责约束、校验、路由和导出。AI 不直接写入关键业务状态，最终 JSON 必须经过模板、规则和人工/自动路由。</p>
+      <p class="note">设计原则：模型负责理解和候选生成，JSON Schema 负责结构稳定，业务规则负责数据合理性，人工复核负责低置信兜底。AI 不直接写入关键业务状态，最终 JSON 必须经过模板、规则和人工/自动路由。</p>
     </section>
 
     <section id="runtime" class="section">
@@ -130,11 +130,11 @@
       <h2>4. 约束、校验与兜底</h2>
       <div class="grid four">
         <div class="card"><b>提示词约束</b><span>要求模型只输出 JSON，不要 Markdown，不要额外解释；字段必须来自用户关键词模板。</span></div>
-        <div class="card"><b>JSON Schema</b><span>校验字段名、类型、候选数组、置信度范围、source 枚举。</span></div>
+        <div class="card"><b>JSON Schema 结构约束</b><span>只校验字段名、类型、候选数组、置信度范围、source 枚举和多余字段；不判断字段值是否业务正确。</span></div>
         <div class="card"><b>重试修复</b><span>Schema 或 JSON 解析失败时，把错误作为 error hint 重新要求模型修复。</span></div>
         <div class="card"><b>硬规则引擎</b><span>对缺失候选、多候选、低置信、语义不匹配等结果做业务拦截。</span></div>
       </div>
-      <h3>Schema 约束片段</h3>
+      <h3>Schema 结构约束片段</h3>
       <pre><code>source: ocr | vlm | manual | unknown
 confidence: number, minimum 0, maximum 1
 template_fields.required: 用户输入的全部关键词
@@ -160,7 +160,7 @@ candidates.required: value, recognized_as, source, confidence, evidence</code></
         </div>
         <div class="card">
           <b>问题二：JSON 输出不稳定，怎么保证格式？</b>
-          <span>不要让 LLM 自己设计结构。先给完整模板，再用 JSON Schema 运行时校验，失败后把错误原文反馈给同一个模型自愈重试。</span>
+          <span>不要让 LLM 自己设计结构。先给完整模板，再用 JSON Schema 做运行时结构校验，失败后把错误原文反馈给同一个模型自愈重试。</span>
         </div>
       </div>
 
@@ -201,7 +201,7 @@ candidates.required: value, recognized_as, source, confidence, evidence</code></
 
       <h3>置信度路由</h3>
       <div class="grid three">
-        <div class="card"><b>自动入库</b><span>全字段置信度高、VLM 复核通过、Schema 和规则校验都通过。</span></div>
+        <div class="card"><b>自动入库</b><span>全字段置信度高、VLM 复核通过、Schema 结构合法，且业务规则校验通过。</span></div>
         <div class="card"><b>人工审核</b><span>部分字段低置信、多候选、VLM 标注需要复核、关键字段为空或语义不匹配。</span></div>
         <div class="card"><b>拒绝/重传</b><span>结构化完全失败、无可用 VLM 报告、核心字段无法解析且没有候选。</span></div>
       </div>
@@ -299,11 +299,12 @@ prompt += "\n\nOCR 文本：\n" + (ocr_text or "")[:12000]</code></pre>
     }
   }
 }</code></pre>
-      <p class="warn note">关键点：提示词不是唯一约束。提示词只负责第一层行为引导，后面还有 JSON Schema、后端规则、路由、人工审核和审计日志。</p>
+      <p class="warn note">关键点：提示词不是唯一约束。提示词只负责第一层行为引导，后面还有 JSON Schema 结构约束、业务规则、路由、人工审核和审计日志。Schema 不负责判断业务值对不对。</p>
     </section>
 
     <section id="schema" class="section">
-      <h2>7. JSON Schema 与自愈重试</h2>
+      <h2>7. JSON Schema 结构约束与自愈重试</h2>
+      <p class="note">这里的 JSON Schema 属于结构化提取阶段的格式和结构约束层。它保证模型输出可解析、字段完整、类型正确，但不判断发票号是否真实、金额是否应该选价税合计、日期是否和行程匹配。这些属于下一层业务规则和人工复核。</p>
       <h3>为什么先给模板，不让 LLM 设计结构</h3>
       <p>最有效的格式稳定手段，是在 prompt 里直接给完整 JSON 骨架，让 LLM 只负责填 candidates，不负责设计 key。不给骨架时，模型可能把“发票号”写成 <code>invoice_number</code>、<code>发票号码</code> 或自己新增字段。</p>
 

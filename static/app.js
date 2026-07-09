@@ -6,8 +6,8 @@ const PIPELINE_STAGES = [
   {key: 'input', no: '01', title: '文档输入', tech: 'PyMuPDF'},
   {key: 'ocr', no: '02', title: 'OCR 提取', tech: 'RapidOCR'},
   {key: 'vlm', no: '03', title: 'VLM 理解', tech: 'Qwen3-VL'},
-  {key: 'extract', no: '04', title: '结构化提取', tech: 'JSON Schema'},
-  {key: 'rules', no: '05', title: '规则校验', tech: '硬规则引擎'},
+  {key: 'extract', no: '04', title: '结构化提取', tech: 'Schema 结构约束'},
+  {key: 'rules', no: '05', title: '业务规则校验', tech: '数据合理性'},
   {key: 'routing', no: '06', title: '置信度路由', tech: '自动分流'},
   {key: 'review', no: '07', title: '人工复核', tech: '审计日志'}
 ];
@@ -512,7 +512,7 @@ function schemaStatusBox(d) {
   const s = d.schema_validation || {};
   const valid = s.valid !== false;
   const errors = (s.errors || []).map(x => `<li>${escapeHtml(x)}</li>`).join('');
-  return `<div class="${valid ? 'review-ok' : 'review-alert'} compact"><b>JSON Schema ${valid ? '通过' : '失败'}</b><span>校验阶段：AI 结构化输出之后、业务规则校验之前；重试次数 ${s.retry_count ?? d.retry_count ?? 0}</span>${errors ? `<ul>${errors}</ul>` : ''}</div>`;
+  return `<div class="${valid ? 'review-ok' : 'review-alert'} compact"><b>JSON Schema 结构约束${valid ? '通过' : '失败'}</b><span>只校验 JSON 字段、类型、必填项和枚举；业务数据是否合理在下一层规则校验处理。重试次数 ${s.retry_count ?? d.retry_count ?? 0}</span>${errors ? `<ul>${errors}</ul>` : ''}</div>`;
 }
 function finalResultJson(d) {
   if (!d) return {};
@@ -542,7 +542,7 @@ async function loadExtractStage() {
     textBox.innerHTML = `<div class="structured"><div class="structured-head"><div><b>04 关键词模板结构化 · ${escapeHtml(d.doc_type || '未知文档')}</b><span>用户关键词生成固定字段模板，AI 只为每个字段归集候选值，最终 JSON 只保留人工确认值。</span></div><span class="chip ok">模板字段 ${Object.keys(d.template_fields || {}).length}</span></div>${schemaStatusBox(d)}<table class="field-table"><thead><tr><th>关键词字段</th><th>最终值</th><th>候选数</th><th>最高候选识别为</th><th>最高置信度</th><th>状态</th></tr></thead><tbody>${templateRows(d.template_fields)}</tbody></table></div>`;
     return;
   }
-  textBox.innerHTML = `<div class="structured"><div class="structured-head"><div><b>04 结构化提取 · ${escapeHtml(d.doc_type || '未知文档')}</b><span>按 JSON Schema 归并字段，JSON 展示以这里的结构化结果为准。</span></div><span class="chip ok">Schema 输出</span></div><table class="field-table"><thead><tr><th>字段</th><th>值</th><th>来源</th><th>置信度</th><th>状态</th><th>证据</th></tr></thead><tbody>${structuredRows(d.fields, false)}</tbody></table><details><summary>结构化 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify(d, null, 2))}</pre></details></div>`;
+  textBox.innerHTML = `<div class="structured"><div class="structured-head"><div><b>04 结构化提取 · ${escapeHtml(d.doc_type || '未知文档')}</b><span>LLM 输出后先用 JSON Schema 做结构约束：字段、类型、必填项和枚举必须合法；业务合理性留给规则校验。</span></div><span class="chip ok">结构合法</span></div><table class="field-table"><thead><tr><th>字段</th><th>值</th><th>来源</th><th>置信度</th><th>状态</th><th>证据</th></tr></thead><tbody>${structuredRows(d.fields, false)}</tbody></table><details><summary>结构化 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify(d, null, 2))}</pre></details></div>`;
 }
 async function loadRulesStage() {
   const d = await getExtracted();
@@ -555,9 +555,9 @@ async function loadRulesStage() {
   const warns = (v.warnings || []).map(x => `<li>${escapeHtml(x)}</li>`).join('');
   const lows = (v.low_confidence_fields || []).map(x => `<li>${escapeHtml(hasTemplateFields(d) ? x : fieldLabel(x))}</li>`).join('');
   const rules = (v.rules || []).map(x => `<tr><td>${escapeHtml(x.code || '-')}</td><td>${escapeHtml(x.severity || '-')}</td><td>${escapeHtml(x.message || '-')}</td><td>${escapeHtml(ruleExplain(x.code))}</td></tr>`).join('') || '<tr><td colspan="4">未命中硬规则</td></tr>';
-  const ruleText = hasTemplateFields(d) ? '对关键词模板做缺失候选、多候选、低置信和语义不匹配校验。' : '对结构化字段做金额、日期、重复、必填和低置信度等硬规则判断。';
+  const ruleText = hasTemplateFields(d) ? '对结构化后的候选和最终值做数据合理性校验：缺失候选、多候选、低置信和语义不匹配。' : '对结构化字段做金额、日期、重复、必填和低置信度等业务规则判断。';
   const schema = d.schema_validation || {};
-  textBox.innerHTML = `<div class="stage-panel"><div class="stage-head"><div><b>05 规则校验</b><span>${ruleText}</span></div><span class="chip ${errs ? 'bad' : warns || lows ? 'warn' : 'ok'}">${errs ? '有错误' : warns || lows ? '有提醒' : '通过'}</span></div><div class="stage-grid"><div><b>Schema 校验</b><span>${schema.valid === false ? '结构失败，已触发重试或失败兜底' : '字段名、类型、候选数组合法'}</span></div><div><b>模板完整性</b><span>每个关键词必须有候选或人工值</span></div><div><b>候选冲突</b><span>同一关键词多候选进入人工选择</span></div><div><b>置信阈值</b><span>最高候选低于 75% 标记复核</span></div><div><b>语义匹配</b><span>候选识别名和目标关键词不一致时拦截</span></div></div>${schemaStatusBox(d)}${errs ? `<div class="review-alert compact"><b>错误</b><ul>${errs}</ul></div>` : ''}${warns ? `<div class="review-alert compact"><b>警告</b><ul>${warns}</ul></div>` : ''}${lows ? `<div class="rules-box"><b>低置信字段</b><ul>${lows}</ul></div>` : ''}<table class="field-table"><thead><tr><th>规则</th><th>级别</th><th>命中说明</th><th>校验含义</th></tr></thead><tbody>${rules}</tbody></table><details><summary>规则校验 JSON（展示版）</summary><pre class="json-view">${escapeHtml(JSON.stringify(cleanDisplayJson(v), null, 2))}</pre></details></div>`;
+  textBox.innerHTML = `<div class="stage-panel"><div class="stage-head"><div><b>05 业务规则校验</b><span>${ruleText}</span></div><span class="chip ${errs ? 'bad' : warns || lows ? 'warn' : 'ok'}">${errs ? '有错误' : warns || lows ? '有提醒' : '通过'}</span></div><div class="stage-grid"><div><b>Schema 结构约束</b><span>${schema.valid === false ? '结构失败，已触发重试或失败兜底' : '字段名、类型、候选数组合法，不代表业务值一定正确'}</span></div><div><b>模板完整性</b><span>每个关键词必须有候选或人工值</span></div><div><b>候选冲突</b><span>同一关键词多候选进入人工选择</span></div><div><b>置信阈值</b><span>最高候选低于 75% 标记复核</span></div><div><b>语义匹配</b><span>候选识别名和目标关键词不一致时拦截</span></div></div>${schemaStatusBox(d)}${errs ? `<div class="review-alert compact"><b>错误</b><ul>${errs}</ul></div>` : ''}${warns ? `<div class="review-alert compact"><b>警告</b><ul>${warns}</ul></div>` : ''}${lows ? `<div class="rules-box"><b>低置信字段</b><ul>${lows}</ul></div>` : ''}<table class="field-table"><thead><tr><th>规则</th><th>级别</th><th>命中说明</th><th>校验含义</th></tr></thead><tbody>${rules}</tbody></table><details><summary>规则校验 JSON（展示版）</summary><pre class="json-view">${escapeHtml(JSON.stringify(cleanDisplayJson(v), null, 2))}</pre></details></div>`;
 }
 async function loadRoutingStage() {
   const d = await getExtracted();
