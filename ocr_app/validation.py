@@ -112,7 +112,7 @@ def normalize_candidate(raw):
     except (TypeError, ValueError):
         confidence = 0
     source = raw.get("source", "unknown")
-    return {
+    candidate = {
         "value": "" if raw.get("value") is None else str(raw.get("value")).strip(),
         "recognized_as": "" if raw.get("recognized_as") is None else str(raw.get("recognized_as")).strip(),
         "source": source if source in SOURCE_VALUES else "unknown",
@@ -123,13 +123,31 @@ def normalize_candidate(raw):
         "selected": bool(raw.get("selected", False)),
         "review_reason": "" if raw.get("review_reason") is None else str(raw.get("review_reason")).strip(),
     }
+    if isinstance(raw.get("bbox"), list):
+        candidate["bbox"] = raw.get("bbox")
+    try:
+        candidate["ocr_score"] = max(0, min(1, float(raw.get("ocr_score", 0))))
+    except (TypeError, ValueError):
+        candidate["ocr_score"] = 0
+    return candidate
+
+
+def candidate_rank(candidate, label):
+    recognized = (candidate.get("recognized_as") or "").replace(" ", "")
+    compact_label = str(label or "").replace(" ", "")
+    semantic = 0
+    if recognized and compact_label and (compact_label in recognized or recognized in compact_label):
+        semantic = 0.18
+    ocr_support = 0.08 if candidate.get("ocr_value") or candidate.get("bbox") else 0
+    ocr_score = float(candidate.get("ocr_score") or 0) * 0.06
+    return float(candidate.get("confidence") or 0) + semantic + ocr_support + ocr_score
 
 
 def normalize_template_field(raw, label):
     raw = raw if isinstance(raw, dict) else {}
     candidates = [normalize_candidate(item) for item in (raw.get("candidates") or []) if isinstance(item, (dict, str, int, float))]
     candidates = [item for item in candidates if item.get("value")]
-    candidates.sort(key=lambda item: item.get("confidence", 0), reverse=True)
+    candidates.sort(key=lambda item: candidate_rank(item, label), reverse=True)
     selected_index = raw.get("selected_candidate_index", None)
     try:
         selected_index = None if selected_index is None else int(selected_index)

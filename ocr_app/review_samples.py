@@ -10,14 +10,25 @@ class ReviewSamples:
         self.path = DATA_DIR / "review_samples.jsonl"
 
     def write_field_change(self, job_id, page_no, field, before, after, reason="", ocr_text="", vlm_text="", doc_type=""):
+        model_value = (before or {}).get("value", "")
+        manual_value = (after or {}).get("value", "")
+        candidates = []
+        if isinstance(before, dict) and isinstance(before.get("candidates"), list):
+            candidates = before.get("candidates")[:10]
+            selected_index = after.get("selected_candidate_index") if isinstance(after, dict) else None
+            if isinstance(selected_index, int) and 0 <= selected_index < len(candidates):
+                model_value = candidates[selected_index].get("value", model_value)
+        if isinstance(after, dict) and after.get("final_value") is not None:
+            manual_value = after.get("final_value", "")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         row = {
             "time": time.time(),
             "job_id": job_id,
             "page_no": page_no,
             "field": field,
-            "model_value": (before or {}).get("value", ""),
-            "manual_value": (after or {}).get("value", ""),
+            "model_value": model_value,
+            "manual_value": manual_value,
+            "candidates": candidates,
             "reason": reason,
             "doc_type": doc_type,
             "ocr_text": (ocr_text or "")[:12000],

@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .config import EXTRACTION_MAX_TOKENS, EXTRACTION_MODEL, EXTRACTION_TIMEOUT_SECONDS, SILICONFLOW_API_URL, TEXT_DIR_NAME
 from .schema import validate_template_payload
-from .validation import normalize_extracted, validate_document
+from .validation import candidate_rank, normalize_extracted, validate_document
 
 EXTRACT_DIR_NAME = "extracted"
 
@@ -160,6 +160,11 @@ class ExtractionService:
                     candidate.setdefault("ocr_value", "")
                     candidate.setdefault("bbox", [])
                     candidate.setdefault("ocr_score", 0)
+            field["candidates"] = sorted(
+                field.get("candidates") or [],
+                key=lambda item: candidate_rank(item, field.get("label") or field.get("keyword") or ""),
+                reverse=True,
+            )
         return document
 
     def extracted_dir(self, job_id):
