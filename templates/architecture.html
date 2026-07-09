@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI文档识别平台 · 数据流与实现说明</title>
+  <link rel="stylesheet" href="/static/architecture.css">
+</head>
+<body>
+  <header>
+    <h1>AI文档识别平台 · 数据流与实现说明</h1>
+    <div class="nav">
+      <a href="/">返回工作台</a>
+      <a href="#pipeline">七层管道</a>
+      <a href="#contracts">数据契约</a>
+      <a href="#prompts">提示词</a>
+      <a href="#code">核心代码</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Enterprise Document AI Pipeline</div>
+        <h2>从 PDF 到最终业务 JSON，不依赖单次模型输出，而是用 OCR、VLM、Schema、规则和人工复核组成稳定闭环。</h2>
+        <p>这个系统的目标不是让大模型直接“猜出最终答案”，而是把文档识别拆成可追踪、可校验、可人工介入的工程链路。用户输入一组关键词，系统为每个关键词生成固定 JSON 模板；AI 只负责寻找候选值；规则和人工审核负责决定最终值。</p>
+        <p>最终导出的业务 JSON 只包含用户关键词对应的字段和值。OCR 坐标、证据、候选列表、置信度、路由原因都属于过程数据，用于展示、审计和人工确认，不进入默认最终 JSON。</p>
+        <div class="badgebar">
+          <span class="badge">PyMuPDF</span>
+          <span class="badge">RapidOCR</span>
+          <span class="badge">Qwen3-VL</span>
+          <span class="badge">DeepSeek-V4-Flash</span>
+          <span class="badge">JSON Schema</span>
+          <span class="badge">规则引擎</span>
+          <span class="badge">人工复核</span>
+        </div>
+      </div>
+      <div class="summary">
+        <div><b>核心输入</b><span>PDF 文件、页码范围、关键词模板、OCR/VLM 并发、模型配置、本机 API Key。</span></div>
+        <div><b>核心中间产物</b><span>页面图片、OCR 文本与坐标、VLM 复核报告、关键词候选、Schema 校验结果、规则命中、路由状态。</span></div>
+        <div><b>核心输出</b><span>默认导出纯最终 JSON；审计模式可导出页码、路由、置信度和人工状态。</span></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>目录</h2>
+      <div class="toc">
+        <a href="#pipeline">1. 七层处理管道</a>
+        <a href="#runtime">2. 运行时数据流</a>
+        <a href="#contracts">3. JSON 与数据契约</a>
+        <a href="#constraints">4. 约束与兜底</a>
+        <a href="#prompts">5. 提示词设计</a>
+        <a href="#code">6. 核心代码</a>
+        <a href="#review">7. 人工复核闭环</a>
+        <a href="#limits">8. 当前边界</a>
+      </div>
+    </section>
+
+    <section id="pipeline" class="section">
+      <h2>1. 七层处理管道</h2>
+      <div class="flow">
+        <div class="step"><span class="step-no">01</span><b>文档输入</b><small>PyMuPDF</small><p>上传 PDF，解析页码范围，按 DPI 渲染每页图片，建立 job 状态和页面目录。</p></div>
+        <div class="step"><span class="step-no">02</span><b>OCR 提取</b><small>RapidOCR</small><p>识别文字、坐标、置信度，生成全文 OCR、逐页文本和 OCR JSON。</p></div>
+        <div class="step"><span class="step-no">03</span><b>VLM 理解</b><small>Qwen3-VL</small><p>把页面图片和 OCR 文本一起交给多模态模型，输出复核报告和差异说明。</p></div>
+        <div class="step"><span class="step-no">04</span><b>结构化提取</b><small>DeepSeek + JSON Schema</small><p>根据用户关键词生成模板，AI 为每个关键词归集候选值，不直接生成最终业务数据。</p></div>
+        <div class="step"><span class="step-no">05</span><b>规则校验</b><small>硬规则引擎</small><p>检查缺失候选、多候选、低置信、语义不匹配、金额/日期等规则。</p></div>
+        <div class="step"><span class="step-no">06</span><b>置信度路由</b><small>自动分流</small><p>根据规则错误、警告、低置信字段和人工状态决定自动通过、人工复核或拒绝。</p></div>
+        <div class="step"><span class="step-no">07</span><b>人工复核</b><small>审计日志</small><p>人工选择候选或手动填写最终值，保存样本，生成固定字段最终 JSON。</p></div>
+      </div>
+      <p class="note">设计原则：模型负责理解和候选生成，程序负责约束、校验、路由和导出。AI 不直接写入关键业务状态，最终 JSON 必须经过模板、规则和人工/自动路由。</p>
+    </section>
+
+    <section id="runtime" class="section">
+      <h2>2. 运行时数据流</h2>
+      <div class="diagram">
+        <div class="lane"><div class="lane-title">用户输入</div><div class="lane-body">PDF、关键词、页码范围、DPI、OCR 并发、VLM 并发、模型、API Key。</div></div>
+        <div class="lane"><div class="lane-title">任务状态</div><div class="lane-body"><code>JobStore</code> 保存 <code>state.json</code>，包括 <code>page_results</code>、<code>vlm_results</code>、<code>extracted_results</code>、<code>quality_summary</code>。</div></div>
+        <div class="lane"><div class="lane-title">文件产物</div><div class="lane-body"><code>pages/page_0001.png</code>、<code>texts/page_0001.txt</code>、<code>texts/page_0001.json</code>、<code>vlm/page_0001.json</code>、<code>extracted/page_0001.json</code>。</div></div>
+        <div class="lane"><div class="lane-title">结构化结果</div><div class="lane-body"><code>template_fields</code> 存候选和过程证据，<code>final_fields</code> 存最终确认字段，<code>validation</code> 存规则结果，<code>routing</code> 存流转结论。</div></div>
+        <div class="lane"><div class="lane-title">导出结果</div><div class="lane-body">默认 <code>/api/jobs/&lt;job_id&gt;/export</code> 只返回最终字段 JSON；<code>?include_review=1</code> 返回审计包。</div></div>
+      </div>
+    </section>
+
+    <section id="contracts" class="section">
+      <h2>3. JSON 与数据契约</h2>
+      <div class="grid two">
+        <div class="card">
+          <b>用户关键词模板</b>
+          <span>用户输入 10 个关键词，就生成 10 个固定字段。字段 key 不能被模型新增或删除。</span>
+          <pre><code>{
+  "发票号": {
+    "label": "发票号",
+    "keyword": "发票号",
+    "final_value": "",
+    "review_status": "pending",
+    "selected_candidate_index": null,
+    "candidates": []
+  }
+}</code></pre>
+        </div>
+        <div class="card">
+          <b>最终成果 JSON</b>
+          <span>只保留关键词字段和值，不包含 bbox、证据、多个候选、置信度等过程字段。</span>
+          <pre><code>{
+  "发票号": "031002400111",
+  "金额": "2680.00",
+  "日期": "2026-06-15",
+  "销售方": "示例科技有限公司"
+}</code></pre>
+        </div>
+      </div>
+      <h3>模板候选字段</h3>
+      <pre><code>{
+  "value": "031002400111",
+  "recognized_as": "发票代码",
+  "source": "ocr",
+  "confidence": 0.82,
+  "evidence": "OCR 块命中发票代码 031002400111",
+  "ocr_value": "发票代码 031002400111",
+  "ocr_score": 0.91,
+  "bbox": [[120, 88], [360, 88], [360, 116], [120, 116]],
+  "selected": false
+}</code></pre>
+      <p class="note">候选字段里的 <code>bbox</code> 是 OCR 文字块坐标，只用于页面高亮和人工核验。默认导出时会被剔除。</p>
+    </section>
+
+    <section id="constraints" class="section">
+      <h2>4. 约束、校验与兜底</h2>
+      <div class="grid four">
+        <div class="card"><b>提示词约束</b><span>要求模型只输出 JSON，不要 Markdown，不要额外解释；字段必须来自用户关键词模板。</span></div>
+        <div class="card"><b>JSON Schema</b><span>校验字段名、类型、候选数组、置信度范围、source 枚举。</span></div>
+        <div class="card"><b>重试修复</b><span>Schema 或 JSON 解析失败时，把错误作为 error hint 重新要求模型修复。</span></div>
+        <div class="card"><b>硬规则引擎</b><span>对缺失候选、多候选、低置信、语义不匹配等结果做业务拦截。</span></div>
+      </div>
+      <h3>Schema 约束片段</h3>
+      <pre><code>source: ocr | vlm | manual | unknown
+confidence: number, minimum 0, maximum 1
+template_fields.required: 用户输入的全部关键词
+template_fields.additionalProperties: false
+candidates.required: value, recognized_as, source, confidence, evidence</code></pre>
+      <h3>路由规则</h3>
+      <table>
+        <thead><tr><th>状态</th><th>触发条件</th><th>后续动作</th></tr></thead>
+        <tbody>
+          <tr><td>自动通过</td><td>模板字段均有最终值，未命中错误或警告规则。</td><td>可进入默认最终 JSON。</td></tr>
+          <tr><td>人工复核</td><td>缺失候选、多候选、低置信、语义不匹配、人工未确认。</td><td>进入人工审核页，选择候选或手动填写。</td></tr>
+          <tr><td>拒绝</td><td>结构化失败、关键错误、人工拒绝。</td><td>默认导出跳过；审计导出保留状态。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="prompts" class="section">
+      <h2>5. 提示词设计</h2>
+      <h3>VLM 复核提示词核心</h3>
+      <pre><code>请作为“文档字段核对助手”处理这页扫描件。
+
+你会同时收到：
+1. 页面图片
+2. 本页 OCR 文本
+
+核对规则：
+1. OCR 文本排版可能混乱，但数字、编号、日期、金额通常更准确。
+2. OCR 文本只能作为“独立字符串候选池”使用。
+3. 字段含义、位置、归属、表格关系必须以页面图片中的视觉版式和明确标签为准。
+4. 如果 OCR 与图片/AI 判断不一致、图片不清晰、存在多个候选值、字段归属不确定，必须标记“需要人工复核”。
+5. 不要猜测，不要补全不存在的信息。
+
+输出格式必须包含：
+## 复核结论
+## 字段结果
+## 差异清单</code></pre>
+      <h3>结构化提取提示词核心</h3>
+      <pre><code>你是企业文档关键词模板抽取引擎。请只输出合法 JSON，不要输出 Markdown。
+
+用户会给出一组关键词。每个关键词都是最终 JSON 的目标字段，不能增加字段，不能删除字段。
+你的任务不是自由总结文档字段，而是为每个关键词寻找候选值。
+
+规则：
+1. template_fields 的 key 必须和给定关键词完全一致。
+2. 每个关键词可以有 0 到多个 candidates。
+3. 如果识别到的字段名和关键词不完全一致，也可以作为候选，
+   但必须在 recognized_as 中写出它在文档里实际像什么字段。
+4. 如果关键词较宽泛，例如“金额”，应返回多个相关候选。
+5. 不要把候选值直接当最终值，final_value 默认留空，
+   除非字段名强匹配且置信度很高。
+6. confidence 取 0 到 1。source 只能是 ocr、vlm、manual 或 unknown。</code></pre>
+      <p class="warn note">关键点：提示词不是唯一约束。提示词只负责第一层行为引导，后面还有 JSON Schema、后端规则、路由、人工审核和审计日志。</p>
+    </section>
+
+    <section id="code" class="section">
+      <h2>6. 核心代码说明</h2>
+      <div class="codegrid">
+        <div>
+          <h3>服务初始化</h3>
+          <pre><code># ocr_app/routes.py
+service_lock = threading.Lock()
+
+def get_services():
+    global ocr_service, vlm_service
+    if ocr_service is None:
+        with service_lock:
+            if ocr_service is None:
+                ocr_service = OcrService(
+                    store,
+                    lambda job_id, page_no: vlm_service.schedule(job_id, page_no),
+                    audit_log,
+                )
+                vlm_service = VlmService(
+                    store,
+                    ocr_service.render_page,
+                    audit_log,
+                    extraction_service,
+                )
+    return ocr_service, vlm_service</code></pre>
+        </div>
+        <div>
+          <h3>结构化调用与 Schema 重试</h3>
+          <pre><code># ocr_app/extraction.py
+for attempt in range(3):
+    raw = self.call_llm(api_key, model, vlm_text, ocr_text, keywords, template, last_error)
+    parsed = self.extract_json_fragment(raw)
+    parsed["template_fields"] = merged_template
+    schema_errors = validate_template_payload(parsed, template)
+    if schema_errors:
+        raise ValueError("JSON Schema 校验失败：" + "; ".join(schema_errors[:5]))
+    document = normalize_extracted(parsed, page_no=page_no, raw_vlm_text=vlm_text)
+    validation = validate_document(document, existing)
+    document["routing"] = validation["routing"]</code></pre>
+        </div>
+        <div>
+          <h3>候选排序</h3>
+          <pre><code># ocr_app/validation.py
+def candidate_rank(candidate, label):
+    recognized = (candidate.get("recognized_as") or "").replace(" ", "")
+    compact_label = str(label or "").replace(" ", "")
+    semantic = 0
+    if recognized and compact_label and (compact_label in recognized or recognized in compact_label):
+        semantic = 0.18
+    ocr_support = 0.08 if candidate.get("ocr_value") or candidate.get("bbox") else 0
+    ocr_score = float(candidate.get("ocr_score") or 0) * 0.06
+    return float(candidate.get("confidence") or 0) + semantic + ocr_support + ocr_score</code></pre>
+        </div>
+        <div>
+          <h3>人工选择候选</h3>
+          <pre><code># ocr_app/extraction.py
+selected = value.get("selected_candidate_index", current.get("selected_candidate_index"))
+manual_value = str(value.get("manual_value") or "").strip()
+final_value = manual_value
+if not final_value and isinstance(selected, int) and 0 <= selected < len(candidates):
+    final_value = candidates[selected].get("value", "")
+    for idx, candidate in enumerate(candidates):
+        candidate["selected"] = idx == selected
+current["final_value"] = final_value
+current["review_status"] = "manual" if manual_value else "accepted" if final_value else "pending"</code></pre>
+        </div>
+      </div>
+      <h3>最终导出</h3>
+      <pre><code># ocr_app/export.py
+if has_template_result:
+    if not include_review:
+        return final_fields
+    return {
+        "export_time": datetime.now().isoformat(timespec="seconds"),
+        "job_id": job_id,
+        "source_file": job.get("filename", ""),
+        "final_fields": final_fields,
+        "pages": pages,
+    }</code></pre>
+    </section>
+
+    <section id="review" class="section">
+      <h2>7. 人工复核与样本沉淀</h2>
+      <div class="grid two">
+        <div class="card">
+          <b>人工复核页面做什么</b>
+          <span>每个关键词展示多个候选。审核员可以点击候选“定位”查看 OCR bbox 在原图上的位置，然后选择候选或手动填写最终值。</span>
+        </div>
+        <div class="card">
+          <b>样本沉淀做什么</b>
+          <span>人工修改会写入 <code>data/review_samples.jsonl</code>，保存候选列表、模型值、人工最终值、OCR 文本、VLM 报告和处理原因。</span>
+        </div>
+      </div>
+      <h3>样本结构</h3>
+      <pre><code>{
+  "time": 1783600000.0,
+  "job_id": "20260709_xxxxxxxx",
+  "page_no": 1,
+  "field": "发票号",
+  "model_value": "031002400111",
+  "manual_value": "031002400111",
+  "candidates": [...],
+  "reason": "人工确认发票代码可作为发票号",
+  "doc_type": "发票",
+  "ocr_text": "...",
+  "vlm_text": "..."
+}</code></pre>
+      <p class="note">这些样本后续可以用于 prompt 示例、规则权重调参、字段名同义词表、模型微调或回归测试。</p>
+    </section>
+
+    <section class="section">
+      <h2>8. API 与操作逻辑</h2>
+      <table>
+        <thead><tr><th>接口</th><th>作用</th><th>关键行为</th></tr></thead>
+        <tbody>
+          <tr><td><code>POST /api/jobs</code></td><td>创建识别任务</td><td>保存 job，启动 OCR 线程，按页渲染和识别。</td></tr>
+          <tr><td><code>POST /api/jobs/&lt;job_id&gt;/vlm</code></td><td>批量提交 VLM</td><td>校验页码范围，按 job 的 VLM 并发调度。</td></tr>
+          <tr><td><code>POST /api/jobs/&lt;job_id&gt;/pages/&lt;page_no&gt;/extract</code></td><td>手动结构化</td><td>后台提交结构化线程，避免阻塞 Flask 请求。</td></tr>
+          <tr><td><code>PATCH /api/jobs/&lt;job_id&gt;/pages/&lt;page_no&gt;/fields</code></td><td>保存人工字段</td><td>保存候选选择或手动值，重算规则和路由，写入样本。</td></tr>
+          <tr><td><code>POST /approve</code></td><td>人工通过</td><td>前端先保存字段，再设置 <code>manual_status=approved</code>。</td></tr>
+          <tr><td><code>GET /api/jobs/&lt;job_id&gt;/export</code></td><td>导出最终 JSON</td><td>默认只返回最终字段；审计模式返回全链路元信息。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="limits" class="section">
+      <h2>9. 当前边界与后续可扩展点</h2>
+      <div class="checklist">
+        <div class="checkitem"><span class="tick">✓</span><div><b>已完成：关键词模板驱动</b><span class="muted">用户输入 N 个关键词，就生成 N 个固定字段的最终 JSON。</span></div></div>
+        <div class="checkitem"><span class="tick">✓</span><div><b>已完成：候选证据层</b><span class="muted">候选值保留 OCR 文本、OCR 置信度、bbox 和证据说明。</span></div></div>
+        <div class="checkitem"><span class="tick">✓</span><div><b>已完成：人工样本沉淀</b><span class="muted">人工修正会写入 jsonl，可用于后续训练或 prompt 示例。</span></div></div>
+        <div class="checkitem"><span class="tick">✓</span><div><b>已完成：最终 JSON 与过程 JSON 分离</b><span class="muted">默认导出不包含 bbox、证据、多个候选和规则细节。</span></div></div>
+        <div class="checkitem"><span class="tick">!</span><div><b>待扩展：独立 Document Elements 层</b><span class="muted">当前候选直接携带证据；后续可抽象为 <code>elements[]</code>，让候选引用 element id。</span></div></div>
+        <div class="checkitem"><span class="tick">!</span><div><b>待扩展：版面模型后端</b><span class="muted">可以接 PaddleOCR PP-Structure、deepdoctection 或 Unstructured 作为可选版面解析层。</span></div></div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

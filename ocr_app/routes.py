@@ -75,6 +75,10 @@ def create_app():
             default_extraction_model=get_local_extraction_model(),
         )
 
+    @app.get("/architecture")
+    def architecture():
+        return render_template("architecture.html")
+
     @app.get("/api/local-settings")
     def get_local_settings():
         return jsonify({

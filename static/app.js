@@ -432,11 +432,12 @@ function templateRows(templateFields) {
   }).join('') || '<tr><td colspan="6">暂无模板字段</td></tr>';
 }
 function renderCandidate(fieldKey, field, candidate, idx) {
-  const selected = field.selected_candidate_index === idx || candidate.selected;
+  const hasSelection = Number.isInteger(field.selected_candidate_index) || (field.candidates || []).some(item => item.selected);
+  const selected = field.selected_candidate_index === idx || candidate.selected || (!hasSelection && idx === 0);
   const bbox = candidate.bbox && candidate.bbox.length ? escapeHtml(JSON.stringify(candidate.bbox)) : '';
   const support = candidate.ocr_value ? ` · OCR ${confidenceText(candidate.ocr_score)}` : '';
   const locate = bbox ? `<button class="ghost locate-candidate" type="button" data-bbox="${bbox}">定位</button>` : '';
-  return `<div class="candidate-row${selected ? ' selected' : ''}" data-select-candidate="${escapeHtml(fieldKey)}" data-candidate-index="${idx}"><input type="radio" name="candidate_${escapeHtml(fieldKey)}" data-template-field="${escapeHtml(fieldKey)}" value="${idx}" ${selected ? 'checked' : ''}><span class="candidate-main"><b>${escapeHtml(candidate.value || '')}</b><small>识别为：${escapeHtml(candidate.recognized_as || '-')} · ${escapeHtml(candidate.source || 'unknown')} · 置信度 ${confidenceText(candidate.confidence)}${support}</small><em>${escapeHtml(candidate.evidence || candidate.ocr_value || '')}</em></span><span class="candidate-actions">${locate}<button class="ghost choose-candidate" type="button">采用</button></span></div>`;
+  return `<div class="candidate-row${selected ? ' selected' : ''}" data-select-candidate="${escapeHtml(fieldKey)}" data-candidate-index="${idx}"><input type="radio" name="candidate_${escapeHtml(fieldKey)}" data-template-field="${escapeHtml(fieldKey)}" value="${idx}" ${selected ? 'checked' : ''}><span class="candidate-main"><b>${escapeHtml(candidate.value || '')}</b><small>识别为：${escapeHtml(candidate.recognized_as || '-')} · ${escapeHtml(candidate.source || 'unknown')} · 置信度 ${confidenceText(candidate.confidence)}${support}</small><em>${escapeHtml(candidate.evidence || candidate.ocr_value || '')}</em></span><span class="candidate-actions">${locate}</span></div>`;
 }
 function renderTemplateReview(templateFields) {
   return Object.entries(templateFields || {}).map(([key, field]) => {
@@ -460,12 +461,19 @@ function bindTemplateReviewEvents() {
       }
       const input = row.querySelector('input[type="radio"]');
       if (!input) return;
-      input.checked = true;
       const field = input.dataset.templateField;
+      const wasSelected = input.checked && row.classList.contains('selected');
       for (const item of textBox.querySelectorAll('[data-select-candidate]')) {
-        if (item.dataset.selectCandidate === field) item.classList.remove('selected');
+        if (item.dataset.selectCandidate === field) {
+          item.classList.remove('selected');
+          const radio = item.querySelector('input[type="radio"]');
+          if (radio) radio.checked = false;
+        }
       }
-      row.classList.add('selected');
+      if (!wasSelected) {
+        input.checked = true;
+        row.classList.add('selected');
+      }
     };
   }
 }
@@ -624,7 +632,7 @@ async function runExtractNow() {
 function collectStructuredFields() {
   const fields = {}, reason = $('reviewReason')?.value || '';
   for (const input of textBox.querySelectorAll('[data-template-manual]')) {
-    fields[input.dataset.templateManual] = {manual_value: input.value};
+    fields[input.dataset.templateManual] = {manual_value: input.value, selected_candidate_index: null};
   }
   for (const input of textBox.querySelectorAll('[data-template-field]:checked')) {
     const row = fields[input.dataset.templateField] || {};

@@ -364,6 +364,9 @@ class ExtractionService:
                     final_value = candidates[selected].get("value", "")
                     for idx, candidate in enumerate(candidates):
                         candidate["selected"] = idx == selected
+                else:
+                    for candidate in candidates:
+                        candidate["selected"] = False
                 current["selected_candidate_index"] = selected
                 current["manual_value"] = manual_value
                 current["final_value"] = final_value
