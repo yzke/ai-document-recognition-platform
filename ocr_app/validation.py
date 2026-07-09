@@ -104,15 +104,66 @@ def normalize_field(raw):
     }
 
 
+def normalize_candidate(raw):
+    if not isinstance(raw, dict):
+        raw = {"value": raw}
+    try:
+        confidence = max(0, min(1, float(raw.get("confidence", 0))))
+    except (TypeError, ValueError):
+        confidence = 0
+    source = raw.get("source", "unknown")
+    return {
+        "value": "" if raw.get("value") is None else str(raw.get("value")).strip(),
+        "recognized_as": "" if raw.get("recognized_as") is None else str(raw.get("recognized_as")).strip(),
+        "source": source if source in SOURCE_VALUES else "unknown",
+        "confidence": confidence,
+        "evidence": "" if raw.get("evidence") is None else str(raw.get("evidence")).strip(),
+        "ocr_value": "" if raw.get("ocr_value") is None else str(raw.get("ocr_value")).strip(),
+        "vlm_value": "" if raw.get("vlm_value") is None else str(raw.get("vlm_value")).strip(),
+        "selected": bool(raw.get("selected", False)),
+        "review_reason": "" if raw.get("review_reason") is None else str(raw.get("review_reason")).strip(),
+    }
+
+
+def normalize_template_field(raw, label):
+    raw = raw if isinstance(raw, dict) else {}
+    candidates = [normalize_candidate(item) for item in (raw.get("candidates") or []) if isinstance(item, (dict, str, int, float))]
+    candidates = [item for item in candidates if item.get("value")]
+    candidates.sort(key=lambda item: item.get("confidence", 0), reverse=True)
+    selected_index = raw.get("selected_candidate_index", None)
+    try:
+        selected_index = None if selected_index is None else int(selected_index)
+    except (TypeError, ValueError):
+        selected_index = None
+    final_value = "" if raw.get("final_value") is None else str(raw.get("final_value")).strip()
+    review_status = str(raw.get("review_status") or "pending").strip()
+    return {
+        "label": str(raw.get("label") or label).strip(),
+        "keyword": str(raw.get("keyword") or label).strip(),
+        "final_value": final_value,
+        "review_status": review_status,
+        "selected_candidate_index": selected_index,
+        "candidates": candidates,
+        "manual_value": "" if raw.get("manual_value") is None else str(raw.get("manual_value")).strip(),
+        "review_reason": "" if raw.get("review_reason") is None else str(raw.get("review_reason")).strip(),
+    }
+
+
 def normalize_extracted(raw, page_no=None, raw_vlm_text=""):
     if not isinstance(raw, dict):
         raw = {}
     fields = raw.get("fields") if isinstance(raw.get("fields"), dict) else {}
+    template_fields = raw.get("template_fields") if isinstance(raw.get("template_fields"), dict) else {}
     normalized_fields = {}
     for key, value in fields.items():
         safe_key = re.sub(r"[^A-Za-z0-9_]+", "_", str(key)).strip("_")
         if safe_key:
             normalized_fields[safe_key] = normalize_field(value)
+    normalized_template_fields = {}
+    for key, value in template_fields.items():
+        label = str(key).strip()
+        if label:
+            normalized_template_fields[label] = normalize_template_field(value, label)
     try:
         confidence = max(0, min(1, float(raw.get("extraction_confidence", raw.get("confidence", 0)))))
     except (TypeError, ValueError):
@@ -122,6 +173,8 @@ def normalize_extracted(raw, page_no=None, raw_vlm_text=""):
         "page_no": page_no or raw.get("page_no"),
         "doc_type": str(raw.get("doc_type") or "未知文档").strip(),
         "fields": normalized_fields,
+        "template_fields": normalized_template_fields,
+        "final_fields": raw.get("final_fields") if isinstance(raw.get("final_fields"), dict) else {},
         "extraction_confidence": confidence,
         "retry_count": int(raw.get("retry_count") or 0),
         "raw_vlm_text": raw.get("raw_vlm_text") or raw_vlm_text or "",
@@ -130,12 +183,79 @@ def normalize_extracted(raw, page_no=None, raw_vlm_text=""):
 
 def validate_document(document, existing_documents=None):
     from .routing import decide_route
-    from .rules import evaluate_business_rules, summarize_rules
+    from .rules import evaluate_business_rules, rule, summarize_rules
 
     result = empty_result(float(document.get("extraction_confidence") or 0))
     fields = document.get("fields") or {}
+    template_fields = document.get("template_fields") or {}
     field_review_required = False
     low_confidence_fields = []
+
+    if template_fields:
+        rule_results = []
+        final_fields = {}
+        confidences = []
+        for name, field in template_fields.items():
+            candidates = field.get("candidates") or []
+            best = candidates[0] if candidates else None
+            selected_index = field.get("selected_candidate_index")
+            selected = candidates[selected_index] if isinstance(selected_index, int) and 0 <= selected_index < len(candidates) else None
+            if not field.get("final_value") and selected:
+                field["final_value"] = selected.get("value", "")
+            if not field.get("final_value") and len(candidates) == 1 and best and best.get("confidence", 0) >= 0.9:
+                recognized = (best.get("recognized_as") or "").replace(" ", "")
+                compact_name = str(name).replace(" ", "")
+                if compact_name and (compact_name in recognized or recognized in compact_name):
+                    field["final_value"] = best.get("value", "")
+                    field["selected_candidate_index"] = 0
+                    field["review_status"] = "auto_selected"
+                    best["selected"] = True
+            if not candidates:
+                rule_results.append(rule("template_missing_candidate", f"{name} 未找到候选值", "warning", name))
+                field_review_required = True
+            if len(candidates) > 1:
+                rule_results.append(rule("template_multiple_candidates", f"{name} 有多个候选值，需要人工选择", "warning", name))
+                field_review_required = True
+            if best and best.get("confidence", 0) < 0.75:
+                low_confidence_fields.append(name)
+                rule_results.append(rule("template_low_confidence", f"{name} 最高候选置信度低", "warning", name))
+                field_review_required = True
+            if best and best.get("recognized_as"):
+                recognized = best.get("recognized_as", "").replace(" ", "")
+                compact_name = str(name).replace(" ", "")
+                if compact_name and recognized and compact_name not in recognized and recognized not in compact_name:
+                    rule_results.append(rule("template_semantic_mismatch", f"{name} 的候选被识别为 {best.get('recognized_as')}", "warning", name))
+                    field_review_required = True
+            if not field.get("final_value"):
+                field["review_status"] = "pending"
+                field_review_required = True
+            elif field.get("review_status") not in {"accepted", "manual", "auto_selected"}:
+                field["review_status"] = "accepted"
+            if field.get("final_value"):
+                final_fields[name] = field.get("final_value", "")
+            if best:
+                confidences.append(float(best.get("confidence") or 0))
+        errors, warnings, rule_hits = summarize_rules(rule_results)
+        confidence = min(confidences) if confidences else 0
+        document["extraction_confidence"] = confidence
+        document["final_fields"] = final_fields
+        if errors:
+            routing = "rejected"
+        elif warnings or low_confidence_fields or field_review_required:
+            routing = "human_review"
+        else:
+            routing = "auto_approve"
+        result.update({
+            "valid": not errors,
+            "errors": errors,
+            "warnings": warnings,
+            "rules": rule_results,
+            "rule_hits": rule_hits,
+            "low_confidence_fields": low_confidence_fields,
+            "routing": routing,
+            "final_confidence": confidence,
+        })
+        return result
 
     for name, field in fields.items():
         confidence = field.get("confidence")

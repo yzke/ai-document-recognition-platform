@@ -25,16 +25,26 @@ class ExportService:
             approved = routing == "auto_approve" or manual_status == "approved"
             if not approved and not include_review:
                 continue
-            fields = {
-                key: field.get("value", "")
-                for key, field in (item.get("fields") or {}).items()
-                if isinstance(field, dict)
-            }
+            if item.get("template_fields"):
+                fields = {
+                    key: field.get("final_value", "")
+                    for key, field in (item.get("template_fields") or {}).items()
+                    if isinstance(field, dict)
+                }
+                review_fields = item.get("template_fields") or {}
+            else:
+                fields = {
+                    key: field.get("value", "")
+                    for key, field in (item.get("fields") or {}).items()
+                    if isinstance(field, dict)
+                }
+                review_fields = item.get("fields") or {}
             pages.append({
                 "page_no": item.get("page_no"),
                 "doc_type": item.get("doc_type"),
                 "routing": routing,
                 "fields": fields,
+                "template_fields": review_fields if include_review else None,
                 "confidence": item.get("extraction_confidence", 0),
                 "needs_human_review": routing == "human_review",
             })

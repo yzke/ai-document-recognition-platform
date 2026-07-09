@@ -377,11 +377,35 @@ function structuredRows(fields, editable) {
     return `<tr><td>${escapeHtml(fieldLabel(k))}</td><td>${value}</td><td><span class="chip">${escapeHtml(f.source || 'unknown')}</span></td><td>${confidenceText(f.confidence)}</td><td>${fieldStatusChip(f)}</td><td class="field-evidence">${escapeHtml(evidence)}</td></tr>`;
   }).join('') || '<tr><td colspan="6">暂无字段</td></tr>';
 }
+function hasTemplateFields(d) {
+  return d && d.template_fields && Object.keys(d.template_fields).length > 0;
+}
+function templateRows(templateFields) {
+  return Object.entries(templateFields || {}).map(([key, field]) => {
+    const candidates = field.candidates || [];
+    const best = candidates[0] || {};
+    return `<tr><td>${escapeHtml(field.label || key)}</td><td>${escapeHtml(field.final_value || '') || '<span class="muted">待确认</span>'}</td><td>${candidates.length}</td><td>${escapeHtml(best.recognized_as || '-')}</td><td>${confidenceText(best.confidence)}</td><td>${escapeHtml(field.review_status || 'pending')}</td></tr>`;
+  }).join('') || '<tr><td colspan="6">暂无模板字段</td></tr>';
+}
+function renderCandidate(fieldKey, field, candidate, idx) {
+  const selected = field.selected_candidate_index === idx || candidate.selected;
+  return `<label class="candidate-row"><input type="radio" name="candidate_${escapeHtml(fieldKey)}" data-template-field="${escapeHtml(fieldKey)}" value="${idx}" ${selected ? 'checked' : ''}><span class="candidate-main"><b>${escapeHtml(candidate.value || '')}</b><small>识别为：${escapeHtml(candidate.recognized_as || '-')} · ${escapeHtml(candidate.source || 'unknown')} · 置信度 ${confidenceText(candidate.confidence)}</small><em>${escapeHtml(candidate.evidence || candidate.ocr_value || '')}</em></span></label>`;
+}
+function renderTemplateReview(templateFields) {
+  return Object.entries(templateFields || {}).map(([key, field]) => {
+    const candidates = (field.candidates || []).map((candidate, idx) => renderCandidate(key, field, candidate, idx)).join('') || '<div class="empty compact-empty">没有候选值，可手动填写</div>';
+    return `<div class="template-card"><div class="template-head"><div><b>${escapeHtml(field.label || key)}</b><span>关键词：${escapeHtml(field.keyword || key)} · ${escapeHtml(field.review_status || 'pending')}</span></div><span class="chip ${field.final_value ? 'ok' : 'warn'}">${field.final_value ? '已有最终值' : '待确认'}</span></div><div class="candidate-list">${candidates}</div><label>手动最终值</label><input data-template-manual="${escapeHtml(key)}" value="${escapeHtml(field.manual_value || field.final_value || '')}" placeholder="不选择候选时可手动填写"></div>`;
+  }).join('') || '<div class="empty">暂无模板字段</div>';
+}
 async function loadExtractStage() {
   const d = await getExtracted();
   if (d.status === 'none') {
     textBox.innerHTML = `<div class="structured-empty"><pre>${escapeHtml(d.message || '尚未结构化提取。AI 报告完成后会自动生成。')}</pre><button id="runExtractNow" class="secondary" type="button">立即结构化</button></div>`;
     $('runExtractNow').onclick = runExtractNow;
+    return;
+  }
+  if (hasTemplateFields(d)) {
+    textBox.innerHTML = `<div class="structured"><div class="structured-head"><div><b>04 关键词模板结构化 · ${escapeHtml(d.doc_type || '未知文档')}</b><span>用户关键词生成固定 JSON 模板，AI 只为每个关键词归集候选值。</span></div><span class="chip ok">模板字段 ${Object.keys(d.template_fields || {}).length}</span></div><table class="field-table"><thead><tr><th>关键词字段</th><th>最终值</th><th>候选数</th><th>最高候选识别为</th><th>最高置信度</th><th>状态</th></tr></thead><tbody>${templateRows(d.template_fields)}</tbody></table><details open><summary>关键词模板 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify({template_fields: d.template_fields, final_fields: d.final_fields || {}}, null, 2))}</pre></details></div>`;
     return;
   }
   textBox.innerHTML = `<div class="structured"><div class="structured-head"><div><b>04 结构化提取 · ${escapeHtml(d.doc_type || '未知文档')}</b><span>按 JSON Schema 归并字段，JSON 展示以这里的结构化结果为准。</span></div><span class="chip ok">Schema 输出</span></div><table class="field-table"><thead><tr><th>字段</th><th>值</th><th>来源</th><th>置信度</th><th>状态</th><th>证据</th></tr></thead><tbody>${structuredRows(d.fields, false)}</tbody></table><details><summary>结构化 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify(d, null, 2))}</pre></details></div>`;
@@ -395,9 +419,10 @@ async function loadRulesStage() {
   const v = d.validation || {};
   const errs = (v.errors || []).map(x => `<li>${escapeHtml(x)}</li>`).join('');
   const warns = (v.warnings || []).map(x => `<li>${escapeHtml(x)}</li>`).join('');
-  const lows = (v.low_confidence_fields || []).map(x => `<li>${escapeHtml(fieldLabel(x))}</li>`).join('');
+  const lows = (v.low_confidence_fields || []).map(x => `<li>${escapeHtml(hasTemplateFields(d) ? x : fieldLabel(x))}</li>`).join('');
   const rules = (v.rules || []).map(x => `<tr><td>${escapeHtml(x.code || '-')}</td><td>${escapeHtml(x.severity || '-')}</td><td>${escapeHtml(x.message || '-')}</td></tr>`).join('') || '<tr><td colspan="3">未命中硬规则</td></tr>';
-  textBox.innerHTML = `<div class="stage-panel"><div class="stage-head"><div><b>05 规则校验</b><span>对结构化字段做金额、日期、重复、必填和低置信度等硬规则判断。</span></div><span class="chip ${errs ? 'bad' : warns || lows ? 'warn' : 'ok'}">${errs ? '有错误' : warns || lows ? '有提醒' : '通过'}</span></div>${errs ? `<div class="review-alert compact"><b>错误</b><ul>${errs}</ul></div>` : ''}${warns ? `<div class="review-alert compact"><b>警告</b><ul>${warns}</ul></div>` : ''}${lows ? `<div class="rules-box"><b>低置信字段</b><ul>${lows}</ul></div>` : ''}<table class="field-table"><thead><tr><th>规则</th><th>级别</th><th>说明</th></tr></thead><tbody>${rules}</tbody></table><details><summary>规则校验 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify(v, null, 2))}</pre></details></div>`;
+  const ruleText = hasTemplateFields(d) ? '对关键词模板做缺失候选、多候选、低置信和语义不匹配校验。' : '对结构化字段做金额、日期、重复、必填和低置信度等硬规则判断。';
+  textBox.innerHTML = `<div class="stage-panel"><div class="stage-head"><div><b>05 规则校验</b><span>${ruleText}</span></div><span class="chip ${errs ? 'bad' : warns || lows ? 'warn' : 'ok'}">${errs ? '有错误' : warns || lows ? '有提醒' : '通过'}</span></div>${errs ? `<div class="review-alert compact"><b>错误</b><ul>${errs}</ul></div>` : ''}${warns ? `<div class="review-alert compact"><b>警告</b><ul>${warns}</ul></div>` : ''}${lows ? `<div class="rules-box"><b>低置信字段</b><ul>${lows}</ul></div>` : ''}<table class="field-table"><thead><tr><th>规则</th><th>级别</th><th>说明</th></tr></thead><tbody>${rules}</tbody></table><details><summary>规则校验 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify(v, null, 2))}</pre></details></div>`;
 }
 async function loadRoutingStage() {
   const d = await getExtracted();
@@ -409,12 +434,12 @@ async function loadRoutingStage() {
   const reasons = [
     ...(v.errors || []).map(x => `错误：${x}`),
     ...(v.warnings || []).map(x => `警告：${x}`),
-    ...(v.low_confidence_fields || []).map(x => `低置信字段：${fieldLabel(x)}`)
+    ...(v.low_confidence_fields || []).map(x => `低置信字段：${hasTemplateFields(d) ? x : fieldLabel(x)}`)
   ];
   const cards = [
     ['最终路由', routingText(d.routing)],
     ['提取置信度', confidenceText(d.extraction_confidence)],
-    ['低置信字段', (v.low_confidence_fields || []).map(fieldLabel).join('、') || '无'],
+    ['低置信字段', (v.low_confidence_fields || []).map(x => hasTemplateFields(d) ? x : fieldLabel(x)).join('、') || '无'],
     ['人工状态', d.manual_status || '未处理']
   ].map(([k, val]) => `<div><b>${escapeHtml(k)}</b><span>${escapeHtml(val)}</span></div>`).join('');
   textBox.innerHTML = `<div class="stage-panel"><div class="stage-head"><div><b>06 置信度路由</b><span>规则结果和字段置信度共同决定自动通过、进入人工审核或拒绝。</span></div>${routingChip(d) || '<span class="chip">等待</span>'}</div><div class="stage-grid">${cards}</div><div class="rules-box"><b>路由原因</b><ul>${reasons.map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>未发现需要拦截的原因</li>'}</ul></div><details open><summary>路由 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify({routing: d.routing, confidence: d.extraction_confidence, validation: v, manual_status: d.manual_status || null}, null, 2))}</pre></details></div>`;
@@ -430,6 +455,13 @@ async function loadStructured() {
   const errs = (validation.errors || []).map(x => `<li>${escapeHtml(x)}</li>`).join('');
   const warns = (validation.warnings || []).map(x => `<li>${escapeHtml(x)}</li>`).join('');
   const ruleRows = rules.map(x => `<li><b>${escapeHtml(x.code)}</b> · ${escapeHtml(x.severity)} · ${escapeHtml(x.message)}</li>`).join('');
+  if (hasTemplateFields(d)) {
+    textBox.innerHTML = `<div class="structured"><div class="structured-head"><div><b>07 人工复核 · Page ${currentPage} · ${escapeHtml(d.doc_type || '未知文档')}</b><span>${routingText(d.routing)} · 按关键词模板选择候选值或手动填写</span></div><div class="tabgroup"><button id="saveFields" class="secondary" type="button">保存选择</button><button id="approvePage" type="button">通过</button><button id="rejectPage" class="danger" type="button">拒绝</button></div></div><label>人工处理原因</label><input id="reviewReason" class="review-reason" value="${escapeHtml(d.manual_reason || '')}">${errs ? `<div class="review-alert compact"><b>错误</b><ul>${errs}</ul></div>` : ''}${warns ? `<div class="review-alert compact"><b>警告</b><ul>${warns}</ul></div>` : ''}${ruleRows ? `<div class="rules-box"><b>规则命中</b><ul>${ruleRows}</ul></div>` : ''}<div class="template-review">${renderTemplateReview(d.template_fields)}</div><details><summary>最终模板 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify({final_fields: d.final_fields || {}, template_fields: d.template_fields || {}}, null, 2))}</pre></details></div>`;
+    $('saveFields').onclick = saveStructuredFields;
+    $('approvePage').onclick = () => manualReview('approve');
+    $('rejectPage').onclick = () => manualReview('reject');
+    return;
+  }
   textBox.innerHTML = `<div class="structured"><div class="structured-head"><div><b>07 人工复核 · Page ${currentPage} · ${escapeHtml(d.doc_type || '未知文档')}</b><span>${routingText(d.routing)} · 置信度 ${Math.round((d.extraction_confidence || 0) * 100)}%</span></div><div class="tabgroup"><button id="saveFields" class="secondary" type="button">保存字段</button><button id="approvePage" type="button">通过</button><button id="rejectPage" class="danger" type="button">拒绝</button></div></div><label>人工处理原因</label><input id="reviewReason" class="review-reason" value="${escapeHtml(d.manual_reason || '')}">${errs ? `<div class="review-alert compact"><b>错误</b><ul>${errs}</ul></div>` : ''}${warns ? `<div class="review-alert compact"><b>警告</b><ul>${warns}</ul></div>` : ''}${ruleRows ? `<div class="rules-box"><b>规则命中</b><ul>${ruleRows}</ul></div>` : ''}<table class="field-table"><thead><tr><th>字段</th><th>值</th><th>来源</th><th>置信度</th><th>状态</th><th>证据</th></tr></thead><tbody>${structuredRows(d.fields, true)}</tbody></table></div>`;
   $('saveFields').onclick = saveStructuredFields;
   $('approvePage').onclick = () => manualReview('approve');
@@ -450,6 +482,14 @@ async function runExtractNow() {
 }
 async function saveStructuredFields() {
   const fields = {}, reason = $('reviewReason')?.value || '';
+  for (const input of textBox.querySelectorAll('[data-template-manual]')) {
+    fields[input.dataset.templateManual] = {manual_value: input.value};
+  }
+  for (const input of textBox.querySelectorAll('[data-template-field]:checked')) {
+    const row = fields[input.dataset.templateField] || {};
+    row.selected_candidate_index = input.value;
+    fields[input.dataset.templateField] = row;
+  }
   for (const input of textBox.querySelectorAll('[data-field]')) fields[input.dataset.field] = {value: input.value};
   const r = await fetch(`/api/jobs/${currentJob}/pages/${currentPage}/fields`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({fields, reason})});
   if (!r.ok) {
@@ -590,6 +630,12 @@ function renderJsonValue(value) {
 function renderStructuredJson(extracted, aiReport) {
   if (!extracted || extracted.status === 'none') {
     return `<div class="json-panel"><div class="empty">尚未生成结构化结果。AI 原始报告只适合调试，不建议作为业务入库结果。</div><details><summary>原始 AI 报告 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify(aiReport, null, 2))}</pre></details></div>`;
+  }
+  if (hasTemplateFields(extracted)) {
+    const fields = Object.entries(extracted.template_fields || {}).map(([k, f]) => `<tr><td>${escapeHtml(f.label || k)}</td><td>${renderJsonValue(f.final_value || '')}</td><td>${(f.candidates || []).length}</td><td>${escapeHtml(((f.candidates || [])[0] || {}).recognized_as || '-')}</td><td>${confidenceText(((f.candidates || [])[0] || {}).confidence)}</td><td>${escapeHtml(f.review_status || 'pending')}</td></tr>`).join('') || '<tr><td colspan="6">暂无模板字段</td></tr>';
+    const validation = extracted.validation || {};
+    const rules = (validation.rules || []).map(x => `<li><b>${escapeHtml(x.code)}</b> · ${escapeHtml(x.severity)} · ${escapeHtml(x.message)}</li>`).join('') || '<li>无</li>';
+    return `<div class="json-panel"><div class="structured-head"><div><b>关键词模板业务结果</b><span>${escapeHtml(extracted.doc_type || '未知文档')} · ${routingText(extracted.routing)} · 最终字段 ${Object.keys(extracted.final_fields || {}).length}</span></div></div><table class="field-table"><thead><tr><th>关键词字段</th><th>最终值</th><th>候选数</th><th>最高候选识别为</th><th>最高置信度</th><th>状态</th></tr></thead><tbody>${fields}</tbody></table><div class="rules-box"><b>规则/校验</b><ul>${rules}</ul></div><details open><summary>最终字段 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify(extracted.final_fields || {}, null, 2))}</pre></details><details><summary>关键词模板完整 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify(extracted.template_fields || {}, null, 2))}</pre></details><details><summary>原始 AI 报告 JSON（调试用）</summary><pre class="json-view">${escapeHtml(JSON.stringify(aiReport, null, 2))}</pre></details></div>`;
   }
   const fields = Object.entries(extracted.fields || {}).map(([k, f]) => `<tr><td>${escapeHtml(fieldLabel(k))}</td><td>${renderJsonValue(f.value)}</td><td>${escapeHtml(f.source || 'unknown')}</td><td>${confidenceText(f.confidence)}</td><td>${fieldStatusChip(f)}</td><td>${escapeHtml(f.review_reason || '')}</td></tr>`).join('') || '<tr><td colspan="6">暂无字段</td></tr>';
   const validation = extracted.validation || {};
