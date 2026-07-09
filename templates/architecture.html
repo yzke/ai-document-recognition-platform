@@ -49,10 +49,12 @@
         <a href="#runtime">2. 运行时数据流</a>
         <a href="#contracts">3. JSON 与数据契约</a>
         <a href="#constraints">4. 约束与兜底</a>
-        <a href="#prompts">5. 提示词设计</a>
-        <a href="#code">6. 核心代码</a>
-        <a href="#review">7. 人工复核闭环</a>
-        <a href="#limits">8. 当前边界</a>
+        <a href="#qa">5. 企业问答版说明</a>
+        <a href="#prompts">6. 提示词设计</a>
+        <a href="#schema">7. Schema 与自愈</a>
+        <a href="#code">8. 核心代码</a>
+        <a href="#review">9. 人工复核闭环</a>
+        <a href="#limits">10. 当前边界</a>
       </div>
     </section>
 
@@ -149,9 +151,78 @@ candidates.required: value, recognized_as, source, confidence, evidence</code></
       </table>
     </section>
 
+    <section id="qa" class="section">
+      <h2>5. 企业问答版说明</h2>
+      <div class="grid two">
+        <div class="card">
+          <b>问题一：多模态识别不可靠，后校验和兜底怎么做？</b>
+          <span>核心思路是 OCR 和 VLM 分工，而不是二选一。OCR 负责提供精确字符串池，VLM 负责看图片版式和字段归属，后端规则和人工审核负责兜底。</span>
+        </div>
+        <div class="card">
+          <b>问题二：JSON 输出不稳定，怎么保证格式？</b>
+          <span>不要让 LLM 自己设计结构。先给完整模板，再用 JSON Schema 运行时校验，失败后把错误原文反馈给同一个模型自愈重试。</span>
+        </div>
+      </div>
+
+      <h3>OCR + VLM 分工</h3>
+      <table>
+        <thead><tr><th>层</th><th>优势</th><th>风险</th><th>系统约束</th></tr></thead>
+        <tbody>
+          <tr><td>OCR</td><td>数字、金额、日期、编号字符本身更稳定。</td><td>排版顺序、换行、相邻关系、上下文归属可能错。</td><td>只作为字符串候选池，不根据 OCR 排版推断甲乙方、金额归属。</td></tr>
+          <tr><td>VLM</td><td>能看图片版式、表格关系、字段标签和视觉上下文。</td><td>可能幻觉、漏字、把不确定字段强行填值。</td><td>必须以图片版式判断字段含义，值优先从 OCR 文本中选；不确定就标人工复核。</td></tr>
+          <tr><td>后端规则</td><td>稳定、可解释、可回放。</td><td>只能校验明确规则，不能理解复杂语义。</td><td>金额、日期、税号、重复发票号、候选数量、低置信度等全部过规则。</td></tr>
+          <tr><td>人工审核</td><td>处理歧义和低置信字段。</td><td>有人工成本。</td><td>只把真正有歧义的单子送人工，且保存样本用于后续优化。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>候选值而不是单值强提取</h3>
+      <p>宽泛关键词，例如“金额”，天然可能对应支付金额、贷款金额、价税合计、不含税金额、税额。系统不要求模型猜一个唯一值，而是要求模型返回 candidates 数组，人工或规则再决定最终值。</p>
+      <pre><code>{
+  "金额": {
+    "candidates": [
+      {
+        "value": "1200.00",
+        "source": "ocr",
+        "confidence": 0.92,
+        "recognized_as": "价税合计",
+        "evidence": "价税合计 1200.00"
+      },
+      {
+        "value": "1034.48",
+        "source": "vlm",
+        "confidence": 0.75,
+        "recognized_as": "不含税金额",
+        "evidence": "不含税金额栏"
+      }
+    ],
+    "final_value": ""
+  }
+}</code></pre>
+
+      <h3>置信度路由</h3>
+      <div class="grid three">
+        <div class="card"><b>自动入库</b><span>全字段置信度高、VLM 复核通过、Schema 和规则校验都通过。</span></div>
+        <div class="card"><b>人工审核</b><span>部分字段低置信、多候选、VLM 标注需要复核、关键字段为空或语义不匹配。</span></div>
+        <div class="card"><b>拒绝/重传</b><span>结构化完全失败、无可用 VLM 报告、核心字段无法解析且没有候选。</span></div>
+      </div>
+
+      <h3>业务规则交叉校验</h3>
+      <table>
+        <thead><tr><th>规则</th><th>实现方式</th><th>命中后处理</th></tr></thead>
+        <tbody>
+          <tr><td>金额三方校验</td><td>不含税金额 + 税额 ≈ 含税总额，误差超过 0.02 元报警。</td><td>升级人工复核，不直接自动过。</td></tr>
+          <tr><td>日期格式</td><td>支持 20260101、2026-01-01、2026年1月1日 等格式归一解析。</td><td>解析失败进入规则错误。</td></tr>
+          <tr><td>税号格式</td><td>15/18/20 位数字和大写字母。</td><td>格式可疑进入人工复核。</td></tr>
+          <tr><td>同批次重复发票号</td><td>同一个 job 内对已提取结果做重复检测。</td><td>标记警告，进入人工确认。</td></tr>
+          <tr><td>页级独立路由</td><td>每页独立跑 OCR、VLM、结构化、规则和路由。</td><td>一页自动过不影响另一页人工复核。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
     <section id="prompts" class="section">
-      <h2>5. 提示词设计</h2>
-      <h3>VLM 复核提示词核心</h3>
+      <h2>6. 提示词设计</h2>
+      <h3>VLM 复核提示词：看图那一层</h3>
+      <p>这一层的任务是图文互校，不是直接提取最终 JSON。输出故意使用自然语言报告，让视觉模型充分说明依据、差异和不确定点，后面再交给结构化提取层处理。</p>
       <pre><code>请作为“文档字段核对助手”处理这页扫描件。
 
 你会同时收到：
@@ -160,16 +231,30 @@ candidates.required: value, recognized_as, source, confidence, evidence</code></
 
 核对规则：
 1. OCR 文本排版可能混乱，但数字、编号、日期、金额通常更准确。
-2. OCR 文本只能作为“独立字符串候选池”使用。
-3. 字段含义、位置、归属、表格关系必须以页面图片中的视觉版式和明确标签为准。
-4. 如果 OCR 与图片/AI 判断不一致、图片不清晰、存在多个候选值、字段归属不确定，必须标记“需要人工复核”。
-5. 不要猜测，不要补全不存在的信息。
+2. OCR 字符串之间的先后顺序、换行、相邻关系可能完全混乱，不要根据 OCR 排版推断字段归属或逻辑关系。
+3. 字段含义、位置、归属、表格关系、甲乙方关系必须以页面图片中的视觉版式和明确标签为准。
+4. 请根据图片判断字段含义，再优先从 OCR 文本中选取精确字段值。
+5. 如果 OCR 与图片不一致、图片不清晰、存在多个候选值，必须标记“需要人工复核”。
+6. 不要猜测，不要补全不存在的信息。
+7. 不要使用训练知识或知识截止时间去判断日期是否合理。
 
 输出格式必须包含：
 ## 复核结论
 ## 字段结果
 ## 差异清单</code></pre>
-      <h3>结构化提取提示词核心</h3>
+      <h3>VLM 动态注入</h3>
+      <pre><code>if keywords:
+    prompt += "\n本文件的筛选关键词：" + "、".join(keywords)
+    prompt += "\n请优先围绕这些关键词识别相关字段、数值、日期、单位名称和页面证据。"
+
+if ocr_text:
+    prompt += "\n\n本页 OCR 文本如下，作为核对底稿：\n```text\n" + ocr_text[:12000] + "\n```"
+else:
+    prompt += "\n\n本页没有可用 OCR 文本，请仅根据图片识别，并在复核原因中说明。"</code></pre>
+      <p class="note">规则 2 是核心：OCR 排版关系不可信。规则 7 用来防止模型因为训练知识或知识截止时间对 2026 年单据做幻觉判断。</p>
+
+      <h3>Extraction Prompt：结构化提取那一层</h3>
+      <p>这一层只吃文本，不看图。输入是 VLM 报告 + OCR 文本，输出是严格 JSON。视觉模型和结构化模型分开：VLM 用 Qwen3-VL，文本到 JSON 用 DeepSeek-V4-Flash。</p>
       <pre><code>你是企业文档关键词模板抽取引擎。请只输出合法 JSON，不要输出 Markdown。
 
 用户会给出一组关键词。每个关键词都是最终 JSON 的目标字段，不能增加字段，不能删除字段。
@@ -184,11 +269,130 @@ candidates.required: value, recognized_as, source, confidence, evidence</code></
 5. 不要把候选值直接当最终值，final_value 默认留空，
    除非字段名强匹配且置信度很高。
 6. confidence 取 0 到 1。source 只能是 ocr、vlm、manual 或 unknown。</code></pre>
+      <h3>Extraction 动态注入</h3>
+      <pre><code>prompt += "\n\n关键词列表：\n" + json.dumps(keywords or [], ensure_ascii=False)
+prompt += "\n\n必须填充的 JSON 模板：\n" + json.dumps({"template_fields": template}, ensure_ascii=False, indent=2)
+
+if error_hint:
+    prompt += "\n上一次输出解析失败，请修复为严格 JSON。错误：" + error_hint[:500]
+
+prompt += "\n\nVLM 复核报告：\n" + (vlm_text or "")[:12000]
+prompt += "\n\nOCR 文本：\n" + (ocr_text or "")[:12000]</code></pre>
+      <h3>模板骨架示例</h3>
+      <pre><code>{
+  "template_fields": {
+    "发票号": {
+      "label": "发票号",
+      "keyword": "发票号",
+      "final_value": "",
+      "review_status": "pending",
+      "selected_candidate_index": null,
+      "candidates": []
+    },
+    "金额": {
+      "label": "金额",
+      "keyword": "金额",
+      "final_value": "",
+      "review_status": "pending",
+      "selected_candidate_index": null,
+      "candidates": []
+    }
+  }
+}</code></pre>
       <p class="warn note">关键点：提示词不是唯一约束。提示词只负责第一层行为引导，后面还有 JSON Schema、后端规则、路由、人工审核和审计日志。</p>
     </section>
 
+    <section id="schema" class="section">
+      <h2>7. JSON Schema 与自愈重试</h2>
+      <h3>为什么先给模板，不让 LLM 设计结构</h3>
+      <p>最有效的格式稳定手段，是在 prompt 里直接给完整 JSON 骨架，让 LLM 只负责填 candidates，不负责设计 key。不给骨架时，模型可能把“发票号”写成 <code>invoice_number</code>、<code>发票号码</code> 或自己新增字段。</p>
+
+      <h3>动态 Schema 构建</h3>
+      <pre><code>def build_template_schema(template_fields):
+    field_names = list(template_fields.keys())
+    field_schema = {
+        "type": "object",
+        "required": ["label", "keyword", "final_value", "review_status",
+                     "selected_candidate_index", "candidates"],
+        "properties": {
+            "label": {"type": "string"},
+            "keyword": {"type": "string"},
+            "final_value": {"type": "string"},
+            "review_status": {"type": "string"},
+            "selected_candidate_index": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+            "candidates": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["value", "recognized_as", "source", "confidence", "evidence"],
+                    "properties": {
+                        "value": {"type": "string"},
+                        "recognized_as": {"type": "string"},
+                        "source": {"enum": ["ocr", "vlm", "manual", "unknown"]},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "evidence": {"type": "string"}
+                    }
+                }
+            }
+        }
+    }
+    return {
+        "type": "object",
+        "required": ["doc_type", "template_fields"],
+        "properties": {
+            "doc_type": {"type": "string"},
+            "template_fields": {
+                "type": "object",
+                "required": field_names,
+                "properties": {name: field_schema for name in field_names},
+                "additionalProperties": False
+            }
+        }
+    }</code></pre>
+
+      <h3>错误信息精确到路径</h3>
+      <pre><code>def validate_template_payload(payload, template_fields):
+    schema = build_template_schema(template_fields)
+    validator = Draft202012Validator(schema)
+    errors = sorted(validator.iter_errors(payload), key=lambda e: list(e.path))
+    return [
+        (".".join(str(p) for p in e.path) or "$") + ": " + e.message
+        for e in errors
+    ]</code></pre>
+
+      <h3>自愈重试</h3>
+      <pre><code>last_error = ""
+for attempt in range(3):
+    raw = call_llm(..., error_hint=last_error)
+    try:
+        parsed = extract_json_fragment(raw)
+        errors = validate_schema(parsed)
+        if errors:
+            raise ValueError("Schema 校验失败：" + "; ".join(errors[:3]))
+        return parsed
+    except (json.JSONDecodeError, ValueError) as exc:
+        last_error = str(exc)</code></pre>
+
+      <h3>容错解析</h3>
+      <pre><code>def extract_json_fragment(text):
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    start, end = text.find("{"), text.rfind("}")
+    if start >= 0 and end > start:
+        return json.loads(text[start:end + 1])
+    raise ValueError("LLM 未返回合法 JSON")</code></pre>
+
+      <p class="note">不建议再套一层“格式校验 Agent”。把 Schema 错误直接反馈给原模型重试，通常效果接近，成本和延迟更低。</p>
+    </section>
+
     <section id="code" class="section">
-      <h2>6. 核心代码说明</h2>
+      <h2>8. 核心代码说明</h2>
       <div class="codegrid">
         <div>
           <h3>服务初始化</h3>
@@ -269,7 +473,7 @@ if has_template_result:
     </section>
 
     <section id="review" class="section">
-      <h2>7. 人工复核与样本沉淀</h2>
+      <h2>9. 人工复核与样本沉淀</h2>
       <div class="grid two">
         <div class="card">
           <b>人工复核页面做什么</b>
@@ -298,7 +502,7 @@ if has_template_result:
     </section>
 
     <section class="section">
-      <h2>8. API 与操作逻辑</h2>
+      <h2>10. API 与操作逻辑</h2>
       <table>
         <thead><tr><th>接口</th><th>作用</th><th>关键行为</th></tr></thead>
         <tbody>
@@ -313,7 +517,7 @@ if has_template_result:
     </section>
 
     <section id="limits" class="section">
-      <h2>9. 当前边界与后续可扩展点</h2>
+      <h2>11. 当前边界与后续可扩展点</h2>
       <div class="checklist">
         <div class="checkitem"><span class="tick">✓</span><div><b>已完成：关键词模板驱动</b><span class="muted">用户输入 N 个关键词，就生成 N 个固定字段的最终 JSON。</span></div></div>
         <div class="checkitem"><span class="tick">✓</span><div><b>已完成：候选证据层</b><span class="muted">候选值保留 OCR 文本、OCR 置信度、bbox 和证据说明。</span></div></div>
