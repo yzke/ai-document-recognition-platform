@@ -15,6 +15,7 @@ const PIPELINE_STAGES = [
 const $ = id => document.getElementById(id);
 const form = $('form'), pages = $('pages'), textBox = $('textBox'), pageImage = $('pageImage'), imageBox = $('imageBox');
 
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
 }
@@ -558,9 +559,22 @@ async function runExtractNow() {
     textBox.innerHTML = `<pre>${escapeHtml(d.error || '结构化提取失败')}</pre>`;
     return;
   }
-  await poll();
+  let ready = false;
+  for (let i = 0; i < 10; i++) {
+    await sleep(1000);
+    const d = await getExtracted();
+    if (d.status !== 'none') {
+      ready = true;
+      break;
+    }
+  }
   currentStage = 'extract';
-  await loadCurrent();
+  if (ready) {
+    await poll();
+    await loadCurrent();
+  } else {
+    textBox.innerHTML = '<pre>结构化任务已提交后台执行，请稍后刷新或切换回本阶段查看结果。</pre>';
+  }
 }
 function collectStructuredFields() {
   const fields = {}, reason = $('reviewReason')?.value || '';

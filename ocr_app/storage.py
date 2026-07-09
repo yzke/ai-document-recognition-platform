@@ -71,6 +71,8 @@ class JobStore:
     def load(self, job_id):
         if job_id not in self.jobs and self.state_path(job_id).exists():
             with self.lock:
+                if job_id in self.jobs:
+                    return self.jobs[job_id]
                 job = json.loads(self.state_path(job_id).read_text(encoding="utf-8"))
                 if job.get("status") in {"queued", "running", "stopping"}:
                     job["status"] = "stopped"

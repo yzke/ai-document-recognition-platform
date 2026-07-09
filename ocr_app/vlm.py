@@ -194,15 +194,20 @@ class VlmService:
             if not job:
                 return
             results = job.setdefault("vlm_results", {})
+            stale_changed = False
             for page, item in list(results.items()):
                 if self.is_stale_running(item):
                     stale = dict(item)
                     stale.update({"status": "failed", "message": "AI 提取超时，可重新提交", "updated_at": time.time()})
                     results[page] = stale
+                    stale_changed = True
             limit = self.job_limit(job)
             running = sum(1 for item in results.values() if item.get("status") == "running")
             slots = max(0, limit - running)
             if not slots:
+                if stale_changed:
+                    job["updated_at"] = time.time()
+                    self.store.save(job_id)
                 return
             queued = sorted(
                 int(page) for page, item in results.items()
@@ -213,7 +218,7 @@ class VlmService:
                 current.update({"status": "running", "message": "AI 提取中", "updated_at": time.time()})
                 results[str(page_no)] = current
                 to_start.append(page_no)
-            if to_start:
+            if stale_changed or to_start:
                 job["updated_at"] = time.time()
                 self.store.save(job_id)
         for page_no in to_start:

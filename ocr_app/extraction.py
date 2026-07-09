@@ -5,7 +5,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-from .config import EXTRACTION_MAX_TOKENS, EXTRACTION_MODEL, EXTRACTION_TIMEOUT_SECONDS, SILICONFLOW_API_URL
+from .config import EXTRACTION_MAX_TOKENS, EXTRACTION_MODEL, EXTRACTION_TIMEOUT_SECONDS, SILICONFLOW_API_URL, TEXT_DIR_NAME
 from .schema import validate_template_payload
 from .validation import normalize_extracted, validate_document
 
@@ -59,13 +59,13 @@ class ExtractionService:
         self.executor = ThreadPoolExecutor(max_workers=2)
 
     def page_ocr_text(self, job_id, page_no):
-        path = self.store.job_path(job_id) / "texts" / f"page_{page_no:04d}.txt"
+        path = self.store.job_path(job_id) / TEXT_DIR_NAME / f"page_{page_no:04d}.txt"
         if not path.exists():
             return ""
         return path.read_text(encoding="utf-8", errors="ignore")
 
     def page_ocr_records(self, job_id, page_no):
-        path = self.store.job_path(job_id) / "texts" / f"page_{page_no:04d}.json"
+        path = self.store.job_path(job_id) / TEXT_DIR_NAME / f"page_{page_no:04d}.json"
         if not path.exists():
             return []
         try:
@@ -266,7 +266,9 @@ class ExtractionService:
         ocr_text = self.page_ocr_text(job_id, page_no)
         model = job.get("extraction_model") or EXTRACTION_MODEL
         last_error = ""
+        attempts_made = 0
         for attempt in range(3):
+            attempts_made = attempt
             try:
                 raw = self.call_llm(api_key, model, vlm_text, ocr_text, keywords, template, last_error)
                 parsed = self.extract_json_fragment(raw)
@@ -288,7 +290,8 @@ class ExtractionService:
                 self.attach_field_evidence(job_id, document)
                 self.attach_template_evidence(job_id, document)
                 document["retry_count"] = attempt
-                validation = validate_document(document, self.list_existing(job_id))
+                existing = [] if document.get("template_fields") else self.list_existing(job_id)
+                validation = validate_document(document, existing)
                 document["validation"] = validation
                 document["routing"] = validation["routing"]
                 document["status"] = "done"
@@ -306,7 +309,7 @@ class ExtractionService:
             except Exception as exc:
                 last_error = str(exc)
                 break
-        result = self.fallback(page_no, vlm_text, last_error or "结构化提取失败", retry_count=2, template=template)
+        result = self.fallback(page_no, vlm_text, last_error or "结构化提取失败", retry_count=attempts_made, template=template)
         self.save_result(job_id, page_no, result)
         self.audit.write(job_id, "extraction_failed", page_no, detail={"routing": result["routing"], "error": last_error})
         return result
@@ -381,7 +384,7 @@ class ExtractionService:
                 "errors": schema_errors,
                 "retry_count": result.get("retry_count", 0),
             }
-            result["validation"] = validate_document(result, self.list_existing(job_id))
+            result["validation"] = validate_document(result, [])
             result["routing"] = result["validation"]["routing"]
             if result.get("manual_status") == "approved":
                 result["routing"] = "auto_approve"

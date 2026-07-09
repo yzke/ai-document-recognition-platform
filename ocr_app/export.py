@@ -29,11 +29,13 @@ class ExportService:
                 continue
             if item.get("template_fields"):
                 has_template_result = True
-                fields = {
-                    key: field.get("final_value", "")
-                    for key, field in (item.get("template_fields") or {}).items()
-                    if isinstance(field, dict)
-                }
+                fields = item.get("final_fields") if isinstance(item.get("final_fields"), dict) else {}
+                if not fields:
+                    fields = {
+                        key: field.get("final_value", "")
+                        for key, field in (item.get("template_fields") or {}).items()
+                        if isinstance(field, dict)
+                    }
                 for key, value in fields.items():
                     if value and not final_fields.get(key):
                         final_fields[key] = value
@@ -49,13 +51,22 @@ class ExportService:
                 "page_no": item.get("page_no"),
                 "doc_type": item.get("doc_type"),
                 "routing": routing,
+                "manual_status": manual_status,
                 "fields": fields,
                 "confidence": item.get("extraction_confidence", 0),
                 "needs_human_review": routing == "human_review",
             })
         if has_template_result:
             self.audit.write(job_id, "export", detail={"pages": len(pages), "include_review": include_review, "template_final": True})
-            return final_fields
+            if not include_review:
+                return final_fields
+            return {
+                "export_time": datetime.now().isoformat(timespec="seconds"),
+                "job_id": job_id,
+                "source_file": job.get("filename", ""),
+                "final_fields": final_fields,
+                "pages": pages,
+            }
         payload = {
             "export_time": datetime.now().isoformat(timespec="seconds"),
             "job_id": job_id,

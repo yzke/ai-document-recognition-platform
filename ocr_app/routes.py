@@ -121,6 +121,7 @@ def create_app():
         model = request.form.get("vlm_model") or get_local_vlm_model()
         model = model if model in VLM_MODELS else DEFAULT_VLM_MODEL
         extraction_model = (request.form.get("extraction_model") or get_local_extraction_model()).strip()
+        extraction_model = extraction_model if extraction_model in EXTRACTION_MODELS else EXTRACTION_MODEL
         api_key = (request.form.get("api_key") or "").strip()
         if request.form.get("save_api_key") == "on" and api_key:
             save_local_settings(api_key, model, extraction_model)
@@ -276,8 +277,8 @@ def create_app():
     def run_extracted(job_id, page_no):
         if not store.load(job_id):
             return jsonify({"error": "任务不存在"}), 404
-        result = extraction_service.run_page(job_id, page_no)
-        return jsonify(result or {"error": "结构化提取失败"}), 200 if result else 400
+        extraction_service.schedule(job_id, page_no)
+        return jsonify({"ok": True, "status": "queued"})
 
     @app.patch("/api/jobs/<job_id>/pages/<int:page_no>/fields")
     def update_fields(job_id, page_no):
@@ -375,6 +376,7 @@ def run_smoke(pdf, pages, dpi, workers):
         "low_conf_threshold": 0.75,
         "auto_vlm_candidates": False,
         "vlm_model": DEFAULT_VLM_MODEL,
+        "extraction_model": EXTRACTION_MODEL,
         "ocr_intra_threads": OCR_INTRA_THREADS,
         "ocr_inter_threads": OCR_INTER_THREADS,
         "created_at": now,

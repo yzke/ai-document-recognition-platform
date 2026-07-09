@@ -22,7 +22,7 @@ def save_local_settings(api_key=None, vlm_model=None, extraction_model=None):
     if vlm_model is not None:
         current["vlm_model"] = vlm_model if vlm_model in VLM_MODELS else DEFAULT_VLM_MODEL
     if extraction_model is not None:
-        current["extraction_model"] = extraction_model if extraction_model in EXTRACTION_MODELS else str(extraction_model or EXTRACTION_MODEL).strip()
+        current["extraction_model"] = extraction_model if extraction_model in EXTRACTION_MODELS else EXTRACTION_MODEL
     LOCAL_SETTINGS_PATH.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
     return current
 
@@ -38,4 +38,4 @@ def get_local_vlm_model():
 
 def get_local_extraction_model():
     model = str(load_local_settings().get("extraction_model") or EXTRACTION_MODEL).strip()
-    return model or EXTRACTION_MODEL
+    return model if model in EXTRACTION_MODELS else EXTRACTION_MODEL
