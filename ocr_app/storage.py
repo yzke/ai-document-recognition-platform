@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from .config import DATA_DIR, JOB_DIR, KEYWORD_HISTORY_PATH
+from .local_settings import get_local_api_key
 
 
 def ensure_dirs():
@@ -52,7 +53,7 @@ class JobStore:
     def public_job(self, job):
         public = {k: v for k, v in job.items() if not k.startswith("_")}
         public["elapsed_seconds"] = compute_elapsed(job)
-        public["vlm_configured"] = bool(job.get("_api_key"))
+        public["vlm_configured"] = bool(job.get("_api_key") or get_local_api_key())
         return public
 
     def save(self, job_id):
@@ -73,7 +74,7 @@ class JobStore:
                 job = json.loads(self.state_path(job_id).read_text(encoding="utf-8"))
                 # Private fields are not persisted. Restore PDF path by filename.
                 job["_pdf_path"] = str(self.job_path(job_id) / job.get("filename", ""))
-                job["_api_key"] = ""
+                job["_api_key"] = get_local_api_key()
                 self.jobs[job_id] = job
                 self.cancel_events.setdefault(job_id, threading.Event())
         return self.jobs.get(job_id)

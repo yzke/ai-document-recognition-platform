@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 *.log
 .env
+local_settings.json
 .venv/
 venv/
 data/

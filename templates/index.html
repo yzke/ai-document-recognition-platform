@@ -33,10 +33,12 @@
       <input name="vlm_workers" type="number" value="2" min="1" max="12">
       <label>VLM 模型</label>
       <select name="vlm_model">
-        {% for model in models %}<option>{{ model }}</option>{% endfor %}
+        {% for model in models %}<option {% if model == default_model %}selected{% endif %}>{{ model }}</option>{% endfor %}
       </select>
       <label>SiliconFlow API Key</label>
       <input name="api_key" type="password" placeholder="配置后启用 AI 提取">
+      <label class="check"><input name="save_api_key" type="checkbox">本机保存 API Key（不提交 Git）</label>
+      <div id="localKeyStatus" class="muted small">未检测本机 Key</div>
     </form>
   </aside>
 
@@ -88,9 +90,10 @@
         </div>
         <div class="viewer">
           <div class="tabs">
-            <div class="tabgroup"><button id="runVlm" class="secondary" type="button" disabled>AI 提取选中页</button><button id="rerunOcr" class="ghost" type="button" disabled>重跑本页 OCR</button><button id="ocrTab" class="active" type="button">OCR 文本</button><button id="vlmTab" type="button">AI 报告</button><button id="structuredTab" type="button">结构化审核</button></div>
+            <div class="tabgroup"><button id="runVlm" class="secondary" type="button" disabled>AI 提取选中页</button><button id="rerunOcr" class="ghost" type="button" disabled>重跑本页 OCR</button></div>
             <span id="vlmStatus" class="muted small">大模型未配置，仅支持文本识别</span>
           </div>
+          <div id="pipeline" class="pipeline" aria-label="文档处理管道"></div>
           <div class="split">
             <div class="preview">
               <div class="previewbar">

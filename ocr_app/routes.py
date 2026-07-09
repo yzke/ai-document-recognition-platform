@@ -21,6 +21,7 @@ from .config import (
 from .audit import AuditLog
 from .export import ExportService
 from .extraction import ExtractionService
+from .local_settings import get_local_api_key, get_local_vlm_model, save_local_settings
 from .ocr import OcrService
 from .review_samples import ReviewSamples
 from .storage import JobStore, get_keyword_history, parse_keywords, record_keyword_history, safe_name
@@ -53,7 +54,24 @@ def create_app():
 
     @app.get("/")
     def index():
-        return render_template("index.html", default_keywords=DEFAULT_KEYWORDS, models=VLM_MODELS)
+        return render_template("index.html", default_keywords=DEFAULT_KEYWORDS, models=VLM_MODELS, default_model=get_local_vlm_model())
+
+    @app.get("/api/local-settings")
+    def get_local_settings():
+        return jsonify({
+            "api_key_configured": bool(get_local_api_key()),
+            "default_vlm_model": get_local_vlm_model(),
+        })
+
+    @app.post("/api/local-settings")
+    def update_local_settings():
+        payload = request.json or {}
+        settings = save_local_settings(payload.get("api_key"), payload.get("vlm_model"))
+        return jsonify({
+            "ok": True,
+            "api_key_configured": bool(settings.get("api_key")),
+            "default_vlm_model": settings.get("vlm_model") or DEFAULT_VLM_MODEL,
+        })
 
     @app.get("/api/jobs")
     def list_jobs():
@@ -79,8 +97,11 @@ def create_app():
             low_conf_threshold = max(0, min(1, float(request.form.get("low_conf_threshold", "0.75") or 0.75)))
         except ValueError:
             return jsonify({"error": "DPI、OCR 并发、AI 并发、低置信阈值和限页必须是数字"}), 400
-        model = request.form.get("vlm_model") or DEFAULT_VLM_MODEL
+        model = request.form.get("vlm_model") or get_local_vlm_model()
         model = model if model in VLM_MODELS else DEFAULT_VLM_MODEL
+        api_key = (request.form.get("api_key") or "").strip()
+        if request.form.get("save_api_key") == "on" and api_key:
+            save_local_settings(api_key, model)
 
         job_id = time.strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8]
         paths = store.job_path(job_id)
@@ -93,7 +114,7 @@ def create_app():
             "id": job_id,
             "filename": pdf_path.name,
             "_pdf_path": str(pdf_path),
-            "_api_key": (request.form.get("api_key") or "").strip(),
+            "_api_key": api_key or get_local_api_key(),
             "status": "queued",
             "message": "任务已创建",
             "keywords": keywords,
@@ -155,6 +176,8 @@ def create_app():
             return jsonify({"error": "任务不存在"}), 404
         payload = request.json or {}
         api_key = (payload.get("api_key") or "").strip()
+        if payload.get("save_api_key") and api_key:
+            save_local_settings(api_key, job.get("vlm_model") or get_local_vlm_model())
         if api_key:
             with store.lock:
                 store.jobs[job_id]["_api_key"] = api_key
@@ -200,6 +223,8 @@ def create_app():
         if not store.load(job_id):
             return jsonify({"error": "任务不存在"}), 404
         api_key = (request.json or {}).get("api_key", "").strip()
+        if (request.json or {}).get("save_api_key") and api_key:
+            save_local_settings(api_key, store.load(job_id).get("vlm_model") or get_local_vlm_model())
         if api_key:
             with store.lock:
                 store.jobs[job_id]["_api_key"] = api_key
@@ -290,7 +315,7 @@ def create_app():
 
     @app.get("/health")
     def health():
-        return jsonify({"ok": True, "max_workers": MAX_WORKERS, "ocr_intra_threads": OCR_INTRA_THREADS, "default_vlm_model": DEFAULT_VLM_MODEL})
+        return jsonify({"ok": True, "max_workers": MAX_WORKERS, "ocr_intra_threads": OCR_INTRA_THREADS, "default_vlm_model": get_local_vlm_model(), "vlm_configured": bool(get_local_api_key())})
 
     return app
 

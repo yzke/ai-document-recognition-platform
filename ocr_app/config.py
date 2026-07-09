@@ -5,6 +5,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data"
 JOB_DIR = DATA_DIR / "jobs"
 KEYWORD_HISTORY_PATH = DATA_DIR / "keyword_history.json"
+LOCAL_SETTINGS_PATH = BASE_DIR / "local_settings.json"
 
 PAGE_DIR_NAME = "pages"
 TEXT_DIR_NAME = "texts"
