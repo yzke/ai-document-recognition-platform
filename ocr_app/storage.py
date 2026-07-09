@@ -72,11 +72,17 @@ class JobStore:
         if job_id not in self.jobs and self.state_path(job_id).exists():
             with self.lock:
                 job = json.loads(self.state_path(job_id).read_text(encoding="utf-8"))
+                if job.get("status") in {"queued", "running", "stopping"}:
+                    job["status"] = "stopped"
+                    job["message"] = "服务重启，任务已中断，请重新提交"
+                    job["finished_at"] = job.get("finished_at") or time.time()
+                    job["updated_at"] = time.time()
                 # Private fields are not persisted. Restore PDF path by filename.
                 job["_pdf_path"] = str(self.job_path(job_id) / job.get("filename", ""))
                 job["_api_key"] = get_local_api_key()
                 self.jobs[job_id] = job
                 self.cancel_events.setdefault(job_id, threading.Event())
+                self.save(job_id)
         return self.jobs.get(job_id)
 
     def update(self, job_id, **fields):
@@ -133,7 +139,7 @@ class JobStore:
             rows.append({
                 "id": state.get("id", state_file.parent.name),
                 "filename": state.get("filename", ""),
-                "status": state.get("status", ""),
+                "status": "stopped" if state.get("status", "") in {"queued", "running", "stopping"} else state.get("status", ""),
                 "created_at": state.get("created_at", 0),
                 "updated_at": state.get("updated_at", 0),
                 "total_pages": state.get("total_pages", 0),

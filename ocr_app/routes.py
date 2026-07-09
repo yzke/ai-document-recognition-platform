@@ -13,6 +13,8 @@ from .config import (
     EXTRACTION_MODEL,
     EXTRACTION_MODELS,
     DEFAULT_VLM_MODEL,
+    MAX_UPLOAD_BYTES,
+    MAX_UPLOAD_MB,
     MAX_WORKERS,
     OCR_INTRA_THREADS,
     OCR_INTER_THREADS,
@@ -32,6 +34,7 @@ from .vlm import VlmService
 store = JobStore()
 ocr_service = None
 vlm_service = None
+service_lock = threading.Lock()
 audit_log = AuditLog(store)
 review_samples = ReviewSamples(store)
 extraction_service = ExtractionService(store, audit_log, review_samples)
@@ -41,9 +44,11 @@ export_service = ExportService(store, audit_log)
 def get_services():
     global ocr_service, vlm_service
     if ocr_service is None:
-        # VLM needs OCR rendering; OCR needs VLM scheduling. Wire after both exist.
-        ocr_service = OcrService(store, lambda job_id, page_no: vlm_service.schedule(job_id, page_no), audit_log)
-        vlm_service = VlmService(store, ocr_service.render_page, audit_log, extraction_service)
+        with service_lock:
+            if ocr_service is None:
+                # VLM needs OCR rendering; OCR needs VLM scheduling. Wire after both exist.
+                ocr_service = OcrService(store, lambda job_id, page_no: vlm_service.schedule(job_id, page_no), audit_log)
+                vlm_service = VlmService(store, ocr_service.render_page, audit_log, extraction_service)
     return ocr_service, vlm_service
 
 
@@ -53,6 +58,11 @@ def create_app():
         template_folder=str(BASE_DIR / "templates"),
         static_folder=str(BASE_DIR / "static"),
     )
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
+
+    @app.errorhandler(413)
+    def request_entity_too_large(_exc):
+        return jsonify({"error": f"文件过大，最大允许 {MAX_UPLOAD_MB} MB"}), 413
 
     @app.get("/")
     def index():
@@ -194,17 +204,21 @@ def create_app():
         if api_key:
             with store.lock:
                 store.jobs[job_id]["_api_key"] = api_key
+        valid_pages = set(job.get("page_numbers") or [])
         pages = []
+        invalid_pages = []
         for page in payload.get("pages") or []:
             try:
                 page_no = int(page)
             except (TypeError, ValueError):
                 continue
-            if page_no >= 1:
+            if page_no >= 1 and (not valid_pages or page_no in valid_pages):
                 pages.append(page_no)
+            else:
+                invalid_pages.append(page_no)
         pages = sorted(set(pages))
         if not pages:
-            return jsonify({"error": "请选择页面"}), 400
+            return jsonify({"error": "请选择当前任务范围内的页面", "invalid_pages": sorted(set(invalid_pages))}), 400
         results = []
         for page_no in pages:
             ok, message = vlm.schedule(job_id, page_no)

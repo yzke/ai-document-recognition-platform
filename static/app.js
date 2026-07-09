@@ -1,5 +1,6 @@
 let currentJob = null, currentPage = null, currentStage = 'input', lastJob = null, timer = null, pageFilter = 'all', vlmView = 'pretty';
 let selectedPages = new Set(), zoom = 1, rotation = 0, panX = 0, panY = 0, isPanning = false, panStart = {x: 0, y: 0};
+let structuredSaveInFlight = false, reviewActionInFlight = false;
 
 const PIPELINE_STAGES = [
   {key: 'input', no: '01', title: '文档输入', tech: 'PyMuPDF'},
@@ -206,8 +207,15 @@ function renderQualitySummary(job) {
 }
 async function poll() {
   if (!currentJob) return;
-  const r = await fetch(`/api/jobs/${currentJob}`);
-  lastJob = await r.json();
+  let r;
+  try {
+    r = await fetch(`/api/jobs/${currentJob}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    lastJob = await r.json();
+  } catch (e) {
+    showMessage(`连接服务失败，稍后自动重试：${e.message || e}`);
+    return;
+  }
   const total = lastJob.total_pages || 0, done = lastJob.done_pages || 0, activeVlm = activeVlmCount(lastJob), summary = lastJob.extraction_summary || {};
   $('fileName').textContent = lastJob.filename || '未上传';
   $('jobStatus').textContent = lastJob.status || '-';
@@ -446,12 +454,20 @@ function routingExplain(d, validation) {
   if (!rows.length) rows.push(['自动通过', '模板字段均有高置信唯一值，且未命中错误或警告规则。']);
   return rows.map(([route, text]) => `<tr><td>${escapeHtml(route)}</td><td>${escapeHtml(text)}</td></tr>`).join('');
 }
+function schemaStatusBox(d) {
+  const s = d.schema_validation || {};
+  const valid = s.valid !== false;
+  const errors = (s.errors || []).map(x => `<li>${escapeHtml(x)}</li>`).join('');
+  return `<div class="${valid ? 'review-ok' : 'review-alert'} compact"><b>JSON Schema ${valid ? '通过' : '失败'}</b><span>校验阶段：AI 结构化输出之后、业务规则校验之前；重试次数 ${s.retry_count ?? d.retry_count ?? 0}</span>${errors ? `<ul>${errors}</ul>` : ''}</div>`;
+}
 function finalResultJson(d) {
   if (!d) return {};
   if (hasTemplateFields(d)) {
     const out = {};
-    for (const [key, field] of Object.entries(d.template_fields || {})) {
-      out[key] = field && field.final_value ? field.final_value : "";
+    const finalFields = d.final_fields || {};
+    for (const key of Object.keys(d.template_fields || {})) {
+      const field = (d.template_fields || {})[key] || {};
+      out[key] = finalFields[key] ?? field.final_value ?? "";
     }
     return out;
   }
@@ -469,7 +485,7 @@ async function loadExtractStage() {
     return;
   }
   if (hasTemplateFields(d)) {
-    textBox.innerHTML = `<div class="structured"><div class="structured-head"><div><b>04 关键词模板结构化 · ${escapeHtml(d.doc_type || '未知文档')}</b><span>用户关键词生成固定字段模板，AI 只为每个字段归集候选值，最终 JSON 只保留人工确认值。</span></div><span class="chip ok">模板字段 ${Object.keys(d.template_fields || {}).length}</span></div><table class="field-table"><thead><tr><th>关键词字段</th><th>最终值</th><th>候选数</th><th>最高候选识别为</th><th>最高置信度</th><th>状态</th></tr></thead><tbody>${templateRows(d.template_fields)}</tbody></table></div>`;
+    textBox.innerHTML = `<div class="structured"><div class="structured-head"><div><b>04 关键词模板结构化 · ${escapeHtml(d.doc_type || '未知文档')}</b><span>用户关键词生成固定字段模板，AI 只为每个字段归集候选值，最终 JSON 只保留人工确认值。</span></div><span class="chip ok">模板字段 ${Object.keys(d.template_fields || {}).length}</span></div>${schemaStatusBox(d)}<table class="field-table"><thead><tr><th>关键词字段</th><th>最终值</th><th>候选数</th><th>最高候选识别为</th><th>最高置信度</th><th>状态</th></tr></thead><tbody>${templateRows(d.template_fields)}</tbody></table></div>`;
     return;
   }
   textBox.innerHTML = `<div class="structured"><div class="structured-head"><div><b>04 结构化提取 · ${escapeHtml(d.doc_type || '未知文档')}</b><span>按 JSON Schema 归并字段，JSON 展示以这里的结构化结果为准。</span></div><span class="chip ok">Schema 输出</span></div><table class="field-table"><thead><tr><th>字段</th><th>值</th><th>来源</th><th>置信度</th><th>状态</th><th>证据</th></tr></thead><tbody>${structuredRows(d.fields, false)}</tbody></table><details><summary>结构化 JSON</summary><pre class="json-view">${escapeHtml(JSON.stringify(d, null, 2))}</pre></details></div>`;
@@ -486,7 +502,8 @@ async function loadRulesStage() {
   const lows = (v.low_confidence_fields || []).map(x => `<li>${escapeHtml(hasTemplateFields(d) ? x : fieldLabel(x))}</li>`).join('');
   const rules = (v.rules || []).map(x => `<tr><td>${escapeHtml(x.code || '-')}</td><td>${escapeHtml(x.severity || '-')}</td><td>${escapeHtml(x.message || '-')}</td><td>${escapeHtml(ruleExplain(x.code))}</td></tr>`).join('') || '<tr><td colspan="4">未命中硬规则</td></tr>';
   const ruleText = hasTemplateFields(d) ? '对关键词模板做缺失候选、多候选、低置信和语义不匹配校验。' : '对结构化字段做金额、日期、重复、必填和低置信度等硬规则判断。';
-  textBox.innerHTML = `<div class="stage-panel"><div class="stage-head"><div><b>05 规则校验</b><span>${ruleText}</span></div><span class="chip ${errs ? 'bad' : warns || lows ? 'warn' : 'ok'}">${errs ? '有错误' : warns || lows ? '有提醒' : '通过'}</span></div><div class="stage-grid"><div><b>模板完整性</b><span>每个关键词必须有候选或人工值</span></div><div><b>候选冲突</b><span>同一关键词多候选进入人工选择</span></div><div><b>置信阈值</b><span>最高候选低于 75% 标记复核</span></div><div><b>语义匹配</b><span>候选识别名和目标关键词不一致时拦截</span></div></div>${errs ? `<div class="review-alert compact"><b>错误</b><ul>${errs}</ul></div>` : ''}${warns ? `<div class="review-alert compact"><b>警告</b><ul>${warns}</ul></div>` : ''}${lows ? `<div class="rules-box"><b>低置信字段</b><ul>${lows}</ul></div>` : ''}<table class="field-table"><thead><tr><th>规则</th><th>级别</th><th>命中说明</th><th>校验含义</th></tr></thead><tbody>${rules}</tbody></table><details><summary>规则校验 JSON（展示版）</summary><pre class="json-view">${escapeHtml(JSON.stringify(cleanDisplayJson(v), null, 2))}</pre></details></div>`;
+  const schema = d.schema_validation || {};
+  textBox.innerHTML = `<div class="stage-panel"><div class="stage-head"><div><b>05 规则校验</b><span>${ruleText}</span></div><span class="chip ${errs ? 'bad' : warns || lows ? 'warn' : 'ok'}">${errs ? '有错误' : warns || lows ? '有提醒' : '通过'}</span></div><div class="stage-grid"><div><b>Schema 校验</b><span>${schema.valid === false ? '结构失败，已触发重试或失败兜底' : '字段名、类型、候选数组合法'}</span></div><div><b>模板完整性</b><span>每个关键词必须有候选或人工值</span></div><div><b>候选冲突</b><span>同一关键词多候选进入人工选择</span></div><div><b>置信阈值</b><span>最高候选低于 75% 标记复核</span></div><div><b>语义匹配</b><span>候选识别名和目标关键词不一致时拦截</span></div></div>${schemaStatusBox(d)}${errs ? `<div class="review-alert compact"><b>错误</b><ul>${errs}</ul></div>` : ''}${warns ? `<div class="review-alert compact"><b>警告</b><ul>${warns}</ul></div>` : ''}${lows ? `<div class="rules-box"><b>低置信字段</b><ul>${lows}</ul></div>` : ''}<table class="field-table"><thead><tr><th>规则</th><th>级别</th><th>命中说明</th><th>校验含义</th></tr></thead><tbody>${rules}</tbody></table><details><summary>规则校验 JSON（展示版）</summary><pre class="json-view">${escapeHtml(JSON.stringify(cleanDisplayJson(v), null, 2))}</pre></details></div>`;
 }
 async function loadRoutingStage() {
   const d = await getExtracted();
@@ -559,33 +576,51 @@ function collectStructuredFields() {
   return {fields, reason};
 }
 async function saveStructuredFields(reload = true) {
-  const {fields, reason} = collectStructuredFields();
-  const r = await fetch(`/api/jobs/${currentJob}/pages/${currentPage}/fields`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({fields, reason})});
-  if (!r.ok) {
-    const d = await r.json();
-    showMessage(d.error || '保存失败');
-    return false;
+  if (structuredSaveInFlight) return false;
+  structuredSaveInFlight = true;
+  const btn = $('saveFields');
+  if (btn) btn.disabled = true;
+  try {
+    const {fields, reason} = collectStructuredFields();
+    const r = await fetch(`/api/jobs/${currentJob}/pages/${currentPage}/fields`, {method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({fields, reason})});
+    if (!r.ok) {
+      const d = await r.json();
+      showMessage(d.error || '保存失败');
+      return false;
+    }
+    await poll();
+    if (reload) await loadStructured();
+    showMessage(`第 ${currentPage} 页字段已保存`);
+    return true;
+  } finally {
+    structuredSaveInFlight = false;
+    if (btn) btn.disabled = false;
   }
-  await poll();
-  if (reload) await loadStructured();
-  showMessage(`第 ${currentPage} 页字段已保存`);
-  return true;
 }
 async function manualReview(action) {
+  if (reviewActionInFlight) return;
+  reviewActionInFlight = true;
+  const actionBtn = action === 'approve' ? $('approvePage') : $('rejectPage');
+  if (actionBtn) actionBtn.disabled = true;
   const reason = $('reviewReason')?.value || '';
-  if (action === 'approve') {
-    const saved = await saveStructuredFields(false);
-    if (!saved) return;
+  try {
+    if (action === 'approve') {
+      const saved = await saveStructuredFields(false);
+      if (!saved) return;
+    }
+    const r = await fetch(`/api/jobs/${currentJob}/pages/${currentPage}/${action}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({reason})});
+    if (!r.ok) {
+      const d = await r.json();
+      showMessage(d.error || '操作失败');
+      return;
+    }
+    await poll();
+    await loadStructured();
+    showMessage(`第 ${currentPage} 页已${action === 'approve' ? '通过' : '拒绝'}`);
+  } finally {
+    reviewActionInFlight = false;
+    if (actionBtn) actionBtn.disabled = false;
   }
-  const r = await fetch(`/api/jobs/${currentJob}/pages/${currentPage}/${action}`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({reason})});
-  if (!r.ok) {
-    const d = await r.json();
-    showMessage(d.error || '操作失败');
-    return;
-  }
-  await poll();
-  await loadStructured();
-  showMessage(`第 ${currentPage} 页已${action === 'approve' ? '通过' : '拒绝'}`);
 }
 
 async function rerunCurrentOcr() {

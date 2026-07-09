@@ -23,8 +23,6 @@ def evaluate_business_rules(document, existing_documents=None):
         normalized = normalize_date((fields.get("date") or {}).get("value"))
         if normalized is None:
             rules.append(rule("date_invalid", "日期格式不合法", "error", "date"))
-        else:
-            fields["date"]["value"] = normalized
     if amount_excl_tax is not None and tax_amount is not None and total is not None:
         if abs((amount_excl_tax + tax_amount) - total) > Decimal("0.02"):
             rules.append(rule("amount_cross_check", "金额交叉校验不一致", "warning", "total_amount"))

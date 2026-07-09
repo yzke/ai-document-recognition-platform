@@ -14,6 +14,8 @@ VLM_DIR_NAME = "vlm"
 DEFAULT_KEYWORDS = "合同,协议,金额,价款,甲方,乙方,发票,清单,项目,编号,日期,盖章,签字"
 CPU_COUNT = os.cpu_count() or 2
 MAX_WORKERS = max(1, min(12, CPU_COUNT))
+MAX_UPLOAD_MB = max(1, int(os.environ.get("MAX_UPLOAD_MB", "200")))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 OCR_INTRA_THREADS = max(1, int(os.environ.get("OCR_INTRA_THREADS", "2")))
 OCR_INTER_THREADS = max(1, int(os.environ.get("OCR_INTER_THREADS", "1")))
 

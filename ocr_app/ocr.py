@@ -158,16 +158,33 @@ class OcrService:
                         index += 1
                     done, _ = wait(pending, return_when=FIRST_COMPLETED, timeout=0.5)
                     for future in done:
-                        pending.pop(future, None)
+                        page_no = pending.pop(future, None)
                         if future.cancelled():
                             continue
-                        result = future.result()
+                        try:
+                            result = future.result()
+                        except Exception as exc:
+                            result = {
+                                "page": page_no or 0,
+                                "chars": 0,
+                                "keywords": [],
+                                "candidate": False,
+                                "seconds": 0,
+                                "avg_score": 0,
+                                "min_score": 0,
+                                "low_conf_count": 0,
+                                "status": "failed",
+                                "error": str(exc)[:500],
+                            }
+                            if self.audit:
+                                self.audit.write(job_id, "ocr_failed", result["page"], detail={"error": result["error"]})
                         if self.audit:
-                            self.audit.write(job_id, "ocr_done", result["page"], detail={
-                                "chars": result.get("chars", 0),
-                                "avg_score": result.get("avg_score", 0),
-                                "low_conf_count": result.get("low_conf_count", 0),
-                            })
+                            if result.get("status") != "failed":
+                                self.audit.write(job_id, "ocr_done", result["page"], detail={
+                                    "chars": result.get("chars", 0),
+                                    "avg_score": result.get("avg_score", 0),
+                                    "low_conf_count": result.get("low_conf_count", 0),
+                                })
                         results.append(result)
                         results.sort(key=lambda item: item["page"])
                         candidates = [r["page"] for r in results if r["candidate"]]
@@ -178,7 +195,8 @@ class OcrService:
 
             full_text = []
             for result in sorted(results, key=lambda item: item["page"]):
-                text = (paths / TEXT_DIR_NAME / f"page_{result['page']:04d}.txt").read_text(encoding="utf-8", errors="ignore")
+                text_path = paths / TEXT_DIR_NAME / f"page_{result['page']:04d}.txt"
+                text = text_path.read_text(encoding="utf-8", errors="ignore") if text_path.exists() else f"[OCR failed] {result.get('error', '')}"
                 full_text.append(f"===== Page {result['page']} =====\n{text}\n")
             (paths / "full_text.txt").write_text("\n".join(full_text), encoding="utf-8")
             self.store.update(job_id, status="done", message="OCR 完成")

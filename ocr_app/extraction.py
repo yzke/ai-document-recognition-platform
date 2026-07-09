@@ -6,6 +6,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from .config import EXTRACTION_MAX_TOKENS, EXTRACTION_MODEL, EXTRACTION_TIMEOUT_SECONDS, SILICONFLOW_API_URL
+from .schema import validate_template_payload
 from .validation import normalize_extracted, validate_document
 
 EXTRACT_DIR_NAME = "extracted"
@@ -227,6 +228,11 @@ class ExtractionService:
             "final_fields": {},
             "extraction_confidence": 0,
             "retry_count": retry_count,
+            "schema_validation": {
+                "valid": False,
+                "errors": [reason],
+                "retry_count": retry_count,
+            },
             "raw_vlm_text": vlm_text or "",
             "validation": {
                 "valid": False,
@@ -270,7 +276,15 @@ class ExtractionService:
                     if key in merged_template and isinstance(value, dict):
                         merged_template[key].update(value)
                 parsed["template_fields"] = merged_template
+                schema_errors = validate_template_payload(parsed, template)
+                if schema_errors:
+                    raise ValueError("JSON Schema 校验失败：" + "; ".join(schema_errors[:5]))
                 document = normalize_extracted(parsed, page_no=page_no, raw_vlm_text=vlm_text)
+                document["schema_validation"] = {
+                    "valid": True,
+                    "errors": [],
+                    "retry_count": attempt,
+                }
                 self.attach_field_evidence(job_id, document)
                 self.attach_template_evidence(job_id, document)
                 document["retry_count"] = attempt
@@ -361,8 +375,18 @@ class ExtractionService:
                         doc_type=result.get("doc_type", ""),
                     )
             result["template_fields"] = merged
+            schema_errors = validate_template_payload(result, merged)
+            result["schema_validation"] = {
+                "valid": not schema_errors,
+                "errors": schema_errors,
+                "retry_count": result.get("retry_count", 0),
+            }
             result["validation"] = validate_document(result, self.list_existing(job_id))
             result["routing"] = result["validation"]["routing"]
+            if result.get("manual_status") == "approved":
+                result["routing"] = "auto_approve"
+            elif result.get("manual_status") == "rejected":
+                result["routing"] = "rejected"
             result["updated_at"] = time.time()
             self.save_result(job_id, page_no, result)
             self.audit.write(job_id, "human_edit", page_no, actor="user", detail={"before": before, "after": merged})
@@ -397,6 +421,10 @@ class ExtractionService:
         result["fields"] = merged
         result["validation"] = validate_document(result, self.list_existing(job_id))
         result["routing"] = result["validation"]["routing"]
+        if result.get("manual_status") == "approved":
+            result["routing"] = "auto_approve"
+        elif result.get("manual_status") == "rejected":
+            result["routing"] = "rejected"
         result["updated_at"] = time.time()
         self.save_result(job_id, page_no, result)
         self.audit.write(job_id, "human_edit", page_no, actor="user", detail={"before": before, "after": merged})
