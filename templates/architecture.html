@@ -46,8 +46,8 @@
       <div class="walk-head">
         <div>
           <div class="eyebrow">Interactive Data Flow</div>
-          <h2>七层数据流转 · 按步骤演示</h2>
-          <p>这部分用于开会演示：从 PDF 输入开始，一步一步展示每层拿什么输入、做什么处理、产出什么文件、如何约束风险。</p>
+          <h2>七层数据流转 · 分阶段说明</h2>
+          <p>从 PDF 输入开始，逐层说明每个阶段拿什么输入、做什么处理、产出什么文件、如何约束风险。</p>
         </div>
         <div class="walk-progress"><span id="walkProgress">01 / 07</span></div>
       </div>
@@ -157,7 +157,7 @@
         <a href="#final-json">4. 最终 JSON 生成</a>
         <a href="#contracts">5. JSON 与数据契约</a>
         <a href="#constraints">6. 约束与兜底</a>
-        <a href="#qa">7. 企业问答版说明</a>
+        <a href="#design-notes">7. 落地设计说明</a>
         <a href="#prompts">8. 提示词设计</a>
         <a href="#schema">9. Schema 与自愈</a>
         <a href="#code">10. 核心代码</a>
@@ -406,15 +406,15 @@ candidates.required: value, recognized_as, source, confidence, evidence</code></
       </table>
     </section>
 
-    <section id="qa" class="section">
-      <h2>7. 企业问答版说明</h2>
+    <section id="design-notes" class="section">
+      <h2>7. 落地设计说明</h2>
       <div class="grid two">
         <div class="card">
-          <b>问题一：多模态识别不可靠，后校验和兜底怎么做？</b>
+          <b>识别可靠性设计</b>
           <span>核心思路是 OCR 和 VLM 分工，而不是二选一。OCR 负责提供精确字符串池，VLM 负责看图片版式和字段归属，后端规则和人工审核负责兜底。</span>
         </div>
         <div class="card">
-          <b>问题二：JSON 输出不稳定，怎么保证格式？</b>
+          <b>JSON 稳定性设计</b>
           <span>不要让 LLM 自己设计结构。先给完整模板，再用 JSON Schema 做运行时结构校验，失败后把错误原文反馈给同一个模型自愈重试。</span>
         </div>
       </div>
@@ -510,7 +510,7 @@ else:
 
       <h3>Extraction Prompt：结构化提取那一层</h3>
       <p>这一层只吃文本，不看图。输入是 VLM 报告 + OCR 文本，输出是严格 JSON。视觉模型和结构化模型分开：VLM 用 Qwen3-VL，文本到 JSON 用 DeepSeek-V4-Flash。</p>
-      <pre><code>你是企业文档关键词模板抽取引擎。请只输出合法 JSON，不要输出 Markdown。
+      <pre><code>你是文档关键词模板抽取引擎。请只输出合法 JSON，不要输出 Markdown。
 
 用户会给出一组关键词。每个关键词都是最终 JSON 的目标字段，不能增加字段，不能删除字段。
 你的任务不是自由总结文档字段，而是为每个关键词寻找候选值。

@@ -12,7 +12,7 @@ from .validation import candidate_rank, normalize_extracted, validate_document
 EXTRACT_DIR_NAME = "extracted"
 
 
-EXTRACTION_PROMPT = """你是企业文档关键词模板抽取引擎。请只输出合法 JSON，不要输出 Markdown。
+EXTRACTION_PROMPT = """你是文档关键词模板抽取引擎。请只输出合法 JSON，不要输出 Markdown。
 
 用户会给出一组关键词。每个关键词都是最终 JSON 的目标字段，不能增加字段，不能删除字段。
 你的任务不是自由总结文档字段，而是为每个关键词寻找候选值。
